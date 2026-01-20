@@ -1,0 +1,38 @@
+# ==============================================================================
+# Biofloc Firmware - sdkconfig.defaults
+# Configuración por defecto para ESP-IDF v5.3 + micro-ROS Jazzy
+# ==============================================================================
+
+# ---- Configuración de micro-ROS ----
+CONFIG_MICRO_ROS_ESP_NETIF_WLAN=y
+CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE=y
+CONFIG_MICRO_ROS_APP_STACK=16000
+CONFIG_MICRO_ROS_APP_TASK_PRIO=5
+
+# ---- Configuración de Agent (se puede sobrescribir en menuconfig) ----
+CONFIG_MICRO_ROS_AGENT_IP="192.168.1.100"
+CONFIG_MICRO_ROS_AGENT_PORT=8888
+
+# ---- WiFi ----
+CONFIG_ESP_WIFI_SCAN_RSSI_THRESHOLD=-127
+
+# ---- Partición de flash ----
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- Tamaño de stack de tareas ----
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ---- Watchdog ----
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# ---- Logging ----
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+
+# ---- LWIP (requerido para micro-ROS UDP) ----
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_LWIP_SO_RCVBUF=y
+
+# ---- FreeRTOS ----
+CONFIG_FREERTOS_HZ=1000

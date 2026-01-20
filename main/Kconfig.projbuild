@@ -1,0 +1,64 @@
+# ==============================================================================
+# Biofloc Firmware - Configuración de Red y micro-ROS
+# Accesible desde: idf.py menuconfig -> Biofloc Configuration
+# ==============================================================================
+
+menu "Biofloc Configuration"
+
+    menu "WiFi Configuration"
+        config BIOFLOC_WIFI_SSID
+            string "WiFi SSID"
+            default "MyNetwork"
+            help
+                SSID (nombre) de la red WiFi a la que se conectará el ESP32.
+
+        config BIOFLOC_WIFI_PASSWORD
+            string "WiFi Password"
+            default "MyPassword"
+            help
+                Contraseña de la red WiFi. Dejar vacío para redes abiertas.
+
+        config BIOFLOC_WIFI_MAXIMUM_RETRY
+            int "Maximum WiFi connection retries"
+            default 15
+            range 1 30
+            help
+                Número máximo de intentos de conexión WiFi antes de reiniciar.
+    endmenu
+
+    menu "micro-ROS Agent Configuration"
+        config BIOFLOC_AGENT_IP
+            string "micro-ROS Agent IP"
+            default "192.168.1.100"
+            help
+                Dirección IP del host donde corre el micro-ROS Agent.
+
+        config BIOFLOC_AGENT_PORT
+            int "micro-ROS Agent Port"
+            default 8888
+            range 1024 65535
+            help
+                Puerto UDP del micro-ROS Agent.
+
+        config BIOFLOC_ROS_NAMESPACE
+            string "ROS 2 Namespace"
+            default "biofloc"
+            help
+                Namespace para los nodos y topics de ROS 2.
+
+        config BIOFLOC_PING_TIMEOUT_MS
+            int "Agent Ping Timeout (ms)"
+            default 1000
+            range 100 10000
+            help
+                Timeout en milisegundos para el ping al Agent.
+
+        config BIOFLOC_PING_RETRIES
+            int "Agent Ping Retries"
+            default 10
+            range 1 100
+            help
+                Número de reintentos de ping antes de considerar el Agent inalcanzable.
+    endmenu
+
+endmenu
