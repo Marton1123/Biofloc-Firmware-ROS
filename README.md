@@ -135,7 +135,3 @@ rcl_publish(&publisher, &msg, NULL);
 idf.py fullclean
 idf.py build
 ```
-
-## 📜 Licencia
-
-MIT License - Biofloc Engineering Team
