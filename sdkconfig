@@ -408,6 +408,36 @@ CONFIG_BIOFLOC_ROS_NAMESPACE="biofloc"
 CONFIG_BIOFLOC_PING_TIMEOUT_MS=1000
 CONFIG_BIOFLOC_PING_RETRIES=10
 # end of micro-ROS Agent Configuration
+
+#
+# Sensor Configuration
+#
+CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS=4000
+CONFIG_BIOFLOC_LOCATION="tanque_01"
+
+#
+# pH Sensor
+#
+CONFIG_BIOFLOC_PH_GPIO=36
+CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR=1474
+CONFIG_BIOFLOC_PH_ENABLED=y
+# end of pH Sensor
+
+#
+# Temperature Sensor
+#
+CONFIG_BIOFLOC_TEMP_GPIO=34
+CONFIG_BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR=3000
+CONFIG_BIOFLOC_TEMP_ENABLED=y
+# end of Temperature Sensor
+# end of Sensor Configuration
+
+#
+# NTP Configuration
+#
+CONFIG_BIOFLOC_NTP_SERVER="pool.ntp.org"
+CONFIG_BIOFLOC_TIMEZONE="CLT3"
+# end of NTP Configuration
 # end of Biofloc Configuration
 
 #

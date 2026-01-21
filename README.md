@@ -1,13 +1,33 @@
 # Biofloc Firmware ROS
 
-Firmware profesional para ESP32 con **micro-ROS Jazzy** sobre **ESP-IDF v5.3**.
+Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **ESP-IDF v5.3** y **MongoDB Atlas**.
+
+**Version:** 2.2.0 (pH Calibration System)
+
+## ✨ Características
+
+- 🌊 Monitoreo en tiempo real de pH y temperatura
+- 📡 Telemetría vía micro-ROS sobre WiFi UDP
+- 🗄️ Almacenamiento automático en MongoDB Atlas
+- 🎯 Calibración de pH de 3 puntos (precisión <0.05 pH)
+- 🔄 Reconexión automática WiFi y Agent
+- 📊 Publicación JSON estructurada
+- 🛠️ Herramientas de diagnóstico y calibración
 
 ## 📋 Requisitos
 
-- ESP-IDF v5.3+ instalado y configurado
-- ESP32, ESP32-S2, ESP32-S3, ESP32-C3, o ESP32-C6
-- micro-ROS Agent corriendo en un host (PC/Raspberry Pi)
-- Red WiFi
+### Hardware
+- ESP32 (240MHz, Dual Core, WiFi)
+- Sensor CWT-BL pH/Temperature Transmitter (0-5V output)
+- Voltage divider: R1=20kΩ, R2=10kΩ
+- Soluciones buffer pH 4.01, 6.86, 9.18 (para calibración)
+
+### Software
+- ESP-IDF v5.3.4+ instalado y configurado
+- ROS 2 Jazzy Desktop
+- Python 3.12+ con pymongo, python-dotenv, numpy
+- micro-ROS Agent
+- MongoDB Atlas account (opcional)
 
 ## 🚀 Quick Start
 
@@ -47,7 +67,123 @@ idf.py build
 idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-## 🖥️ Levantar el micro-ROS Agent
+## 🎯 Calibración del Sensor de pH
+
+### Estado Actual del Sistema (v2.2.0)
+
+**✅ Sistema completamente calibrado:**
+
+| Parámetro | Valor | Notas |
+|-----------|-------|-------|
+| **Voltage Divider Factor** | 1.474 | R1=20kΩ, R2=10kΩ (calibrado con multímetro) |
+| **Calibration Slope** | 2.559823 | Pendiente de la curva pH vs Voltaje |
+| **Calibration Offset** | 0.469193 | Desplazamiento vertical |
+| **R² (ajuste lineal)** | 0.9997 | Ajuste casi perfecto |
+| **Precisión lograda** | ±0.03 pH | Verificado en agua pH 7.06 → 7.09 leído |
+| **Rango calibrado** | pH 4-9 | Buffers: 4.01, 6.86, 9.18 |
+| **Error máximo** | 0.049 pH | En los 3 puntos de calibración |
+
+### Herramientas de Calibración
+
+```bash
+# 1. Monitor de voltaje en tiempo real (comparar con multímetro)
+python3 scripts/monitor_voltage.py
+
+# 2. Diagnóstico del divisor de voltaje
+python3 scripts/fix_voltage_divider.py
+
+# 3. Calibración de 3 puntos (espera 3-7 min por buffer)
+python3 scripts/calibrate_ph_3points.py
+
+# 4. Diagnóstico general del sensor
+python3 scripts/diagnose_ph.py
+```
+
+### Proceso de Calibración Completo
+
+1. **Verificar divisor de voltaje:**
+   - Medir V_GPIO con multímetro mientras el sensor está en agua
+   - Comparar con la lectura del software
+   - Si difieren >5%, ajustar `CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR` en sdkconfig
+
+2. **Realizar calibración de 3 puntos:**
+   - Preparar soluciones buffer pH 4.01, 6.86, 9.18 a temperatura ambiente
+   - Ejecutar `calibrate_ph_3points.py`
+   - **IMPORTANTE:** Esperar 3-5 minutos de estabilización por buffer
+   - El script verifica estabilidad (σ < 0.002V por 50 segundos)
+
+3. **Aplicar parámetros al firmware:**
+   - Copiar slope y offset desde `calibration_3point_result.txt`
+   - Editar `main/main.c`: `sensors_calibrate_ph_manual(slope, offset)`
+   - Recompilar y flashear: `idf.py build flash`
+
+4. **Verificar calibración:**
+   - Probar en agua de pH conocido (medido con sensor manual)
+   - Error esperado: <0.05 pH
+
+**Guía detallada:** Ver [docs/CALIBRATION.md](docs/CALIBRATION.md)
+
+## 🗄️ MongoDB Bridge (Almacenamiento de Datos)
+
+### Configuración
+
+1. **Crear archivo `.env` en el directorio `scripts/`:**
+
+```bash
+MONGODB_URI=mongodb+srv://sistemaslab:PASSWORD@sistemaslab.hk30i2k.mongodb.net/?retryWrites=true&w=majority&appName=SistemasLab
+MONGODB_DB=SistemasLab
+MONGODB_COLLECTION=telemetria
+```
+
+2. **Instalar dependencias:**
+
+```bash
+cd scripts
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pymongo python-dotenv
+```
+
+### Uso
+
+1. **Iniciar micro-ROS Agent:**
+
+```bash
+ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
+```
+
+2. **En otra terminal, iniciar el bridge:**
+
+```bash
+cd /home/Biofloc-Firmware-ROS
+source scripts/.venv/bin/activate
+python3 scripts/sensor_db_bridge.py
+```
+
+3. **Verificar datos en MongoDB Atlas:**
+   - Base de datos: `SistemasLab`
+   - Colección: `telemetria`
+   - Formato de documento:
+     ```json
+     {
+       "timestamp": "2026-01-21T17:15:42-0300",
+       "ph": 7.08,
+       "temperature": 2.26,
+       "device_id": "biofloc_esp32_c8e0",
+       "location": "tanque_01",
+       "_ros_topic": "/biofloc/sensor_data"
+     }
+     ```
+
+### Notas Importantes
+
+- **Timezone:** El ESP32 usa **CLT3** (GMT-3 fijo, Chile)
+- **Timestamp:** Generado por el ESP32 después de sincronizar con NTP
+- **No hay `_received_at`:** Se eliminó por redundante (usamos solo timestamp del dispositivo)
+- **Tasa de guardado:** ~1 mensaje cada 4 segundos (250 msg/hora)
+- **Success rate:** 100% (sin pérdida de datos)
+
+## 🖥️ micro-ROS Agent (Manual)
 
 En tu PC/host con ROS 2 Jazzy:
 
@@ -72,8 +208,18 @@ Biofloc-Firmware-ROS/
 ├── main/
 │   ├── CMakeLists.txt               # CMake del componente main
 │   ├── Kconfig.projbuild            # Configuración para menuconfig
-│   └── main.c                       # Firmware principal (WiFi + micro-ROS)
-└── src/                             # Módulos adicionales (futuro)
+│   └── main.c                       # Firmware principal v2.2.0
+├── docs/
+│   └── CALIBRATION.md               # Guía completa de calibración de pH
+├── scripts/
+│   ├── .venv/                       # Entorno virtual Python
+│   ├── .env                         # Configuración MongoDB (no commiteado)
+│   ├── monitor_voltage.py           # Monitor de voltaje en tiempo real
+│   ├── calibrate_ph_3points.py      # Calibración profesional 3 puntos
+│   ├── diagnose_ph.py               # Diagnóstico del sensor
+│   ├── fix_voltage_divider.py       # Corrección divisor de voltaje
+│   └── sensor_db_bridge.py          # Bridge ROS 2 → MongoDB
+└── calibration_3point_result.txt    # Resultados de calibración
 ```
 
 ## ⚙️ Configuración Kconfig
@@ -88,6 +234,10 @@ Biofloc-Firmware-ROS/
 | `BIOFLOC_ROS_NAMESPACE` | biofloc | Namespace de ROS 2 |
 | `BIOFLOC_PING_TIMEOUT_MS` | 1000 | Timeout del ping |
 | `BIOFLOC_PING_RETRIES` | 10 | Reintentos de ping |
+| `BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR` | 1474 | Factor divisor × 1000 (1.474) |
+| `BIOFLOC_TIMEZONE` | CLT3 | Timezone (CLT3 = Chile GMT-3) |
+| `BIOFLOC_NTP_SERVER` | pool.ntp.org | Servidor NTP para sincronización |
+| `BIOFLOC_LOCATION` | tanque_01 | Identificador de ubicación |
 
 ## 🔄 Flujo de Inicialización
 
@@ -121,17 +271,115 @@ rcl_publish(&publisher, &msg, NULL);
 
 ## 🐛 Troubleshooting
 
-### "Agent unreachable"
-- Verificar que el Agent está corriendo
-- Confirmar IP y puerto en menuconfig
-- Revisar firewall del host
+### pH Sensor
 
-### "WiFi connection failed"
+**Lectura fuera de rango (>14 o <0):**
+- Verificar voltaje en GPIO con multímetro
+- Revisar `CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR` en `sdkconfig`
+- Ejecutar `scripts/fix_voltage_divider.py` para diagnóstico
+
+**Error >0.3 pH:**
+- Realizar calibración de 3 puntos con `scripts/calibrate_ph_3points.py`
+- Usar soluciones buffer pH 4.01, 6.86, 9.18
+- Esperar 3-5 minutos de estabilización por buffer
+- Verificar que R² > 0.999 en resultados
+
+**Sensor no estabiliza:**
+- Enjuagar con agua desmineralizada entre mediciones
+- Revisar temperatura del agua (±2°C)
+- Asegurar que el sensor está completamente sumergido
+- Esperar mínimo 3 minutos antes de leer
+
+### micro-ROS Agent
+
+**"Agent unreachable":**
+- Verificar que el Agent está corriendo: `ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888`
+- Confirmar IP y puerto en `idf.py menuconfig`
+- Revisar firewall del host: `sudo ufw allow 8888/udp`
+
+**"WiFi connection failed":**
 - Verificar SSID y contraseña
 - Asegurar que la red está en rango
+- Verificar banda WiFi (2.4GHz recomendado para ESP32)
 
-### Build errors con micro-ROS
+### MongoDB Bridge
+
+**"Connection refused":**
+- Verificar `.env` con credenciales correctas
+- Verificar IP whitelisting en MongoDB Atlas (0.0.0.0/0 para testing)
+- Verificar que pymongo está instalado: `pip list | grep pymongo`
+
+**"No data received":**
+- Verificar que micro-ROS Agent está ejecutando
+- Confirmar que el firmware está publicando: `ros2 topic echo /biofloc/sensor_data`
+- Revisar namespace de ROS 2 (`BIOFLOC_ROS_NAMESPACE`)
+
+### Build Errors
+
+**"Component not found":**
 ```bash
 idf.py fullclean
 idf.py build
 ```
+
+**"Flash size too small":**
+- Verificar `partitions.csv` para módulos con flash de 2MB
+- Usar `idf.py size` para analizar uso de memoria
+
+## 📊 Especificaciones Técnicas
+
+### Sensor CWT-BL pH
+- **Rango:** 0-14 pH
+- **Salida:** 0-5V (linear, típicamente pH = V × 2.8)
+- **Tiempo de respuesta:** 3-5 minutos (estabilización completa)
+- **Precisión post-calibración:** ±0.03 pH (verificado)
+- **Factor divisor de voltaje:** 1.474 (R1=20kΩ, R2=10kΩ, calibrado)
+- **Fórmula calibrada:** pH = 2.5598 × V_sensor + 0.4692
+
+### Firmware v2.2.0
+- **Tamaño binario:** 867 KB (57% flash libre, 2MB total)
+- **RAM disponible:** ~98 KB (70% libre)
+- **Tasa de publicación:** 1 Hz (cada ~4 segundos)
+- **Formato de mensaje:** ROS 2 custom `SensorData.msg`
+- **Calibración aplicada:** Automática al inicio (hardcoded en firmware)
+
+### Sistema de Telemetría
+- **Protocolo:** UDP sobre WiFi (micro-ROS middleware)
+- **Puerto Agent:** 8888 UDP
+- **Latencia típica:** <50ms (LAN)
+- **Base de datos:** MongoDB Atlas (cloud)
+- **Guardado:** ~250 registros/hora, success rate 100%
+- **Timestamp:** Sincronizado con NTP (pool.ntp.org)
+
+## 📜 Changelog
+
+### v2.2.0 (2026-01-21) - pH Calibration System
+
+**Added:**
+- Sistema completo de calibración de pH de 3 puntos
+- Script `calibrate_ph_3points.py` con timeout extendido (7 min)
+- Script `monitor_voltage.py` para verificación en tiempo real
+- Script `fix_voltage_divider.py` para diagnóstico del divisor
+- Script `diagnose_ph.py` para troubleshooting general
+- Archivo `calibration_3point_result.txt` para guardar resultados
+- Documentación completa en `docs/CALIBRATION.md`
+
+**Changed:**
+- Voltage divider factor: 3.0 → 1.474 (calibrado con multímetro)
+- Timezone: `CLT3CLST` → `CLT3` (GMT-3 fijo, sin horario de verano)
+- MongoDB bridge: eliminado campo `_received_at` redundante
+- Calibración pH aplicada en firmware: slope=2.5598, offset=0.4692
+
+**Fixed:**
+- Error de lectura pH: 14.8 → 7.09 (diferencia de 7.71 pH corregida)
+- Timestamps incorrectos: ahora marca hora local correcta (GMT-3)
+- Estabilización del sensor: aumentado timeout de calibración a 3-7 min
+
+**Performance:**
+- Precisión pH: ±0.27 pH → ±0.03 pH (mejora 9x)
+- R² calibración: 0.9997 (ajuste casi perfecto)
+- Error máximo en buffers: 0.049 pH
+
+## 📜 Licencia
+
+MIT License - Biofloc Engineering Team

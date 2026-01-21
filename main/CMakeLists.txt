@@ -5,6 +5,7 @@
 idf_component_register(
     SRCS 
         "main.c"
+        "sensors.c"
     INCLUDE_DIRS 
         "."
     REQUIRES 
@@ -13,4 +14,5 @@ idf_component_register(
         esp_wifi
         esp_netif
         esp_event
+        esp_adc
 )

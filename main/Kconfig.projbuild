@@ -61,4 +61,81 @@ menu "Biofloc Configuration"
                 Número de reintentos de ping antes de considerar el Agent inalcanzable.
     endmenu
 
+    menu "Sensor Configuration"
+        config BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS
+            int "Sensor sampling interval (ms)"
+            default 4000
+            range 1000 60000
+            help
+                Intervalo de muestreo de sensores en milisegundos.
+
+        config BIOFLOC_LOCATION
+            string "Device Location"
+            default "tanque_01"
+            help
+                Ubicación física del dispositivo (ej: tanque_01, estanque_norte).
+
+        menu "pH Sensor"
+            config BIOFLOC_PH_GPIO
+                int "pH Sensor GPIO"
+                default 36
+                range 32 39
+                help
+                    GPIO para lectura analógica del sensor de pH.
+                    Usar GPIOs ADC1: 32, 33, 34, 35, 36, 37, 38, 39.
+
+            config BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR
+                int "Voltage divider factor x1000"
+                default 3000
+                range 1000 5000
+                help
+                    Factor del divisor de tensión multiplicado por 1000.
+                    Ej: Para R1=20k, R2=10k -> factor=3.0 -> valor=3000.
+                    V_sensor = V_adc * (factor/1000)
+
+            config BIOFLOC_PH_ENABLED
+                bool "Enable pH Sensor"
+                default y
+                help
+                    Habilitar lectura del sensor de pH.
+        endmenu
+
+        menu "Temperature Sensor"
+            config BIOFLOC_TEMP_GPIO
+                int "Temperature Sensor GPIO"
+                default 34
+                range 32 39
+                help
+                    GPIO para lectura analógica del sensor de temperatura.
+                    Usar GPIOs ADC1: 32, 33, 34, 35, 36, 37, 38, 39.
+
+            config BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR
+                int "Voltage divider factor x1000"
+                default 3000
+                range 1000 5000
+                help
+                    Factor del divisor de tensión multiplicado por 1000.
+
+            config BIOFLOC_TEMP_ENABLED
+                bool "Enable Temperature Sensor"
+                default y
+                help
+                    Habilitar lectura del sensor de temperatura.
+        endmenu
+    endmenu
+
+    menu "NTP Configuration"
+        config BIOFLOC_NTP_SERVER
+            string "NTP Server"
+            default "pool.ntp.org"
+            help
+                Servidor NTP para sincronización de hora.
+
+        config BIOFLOC_TIMEZONE
+            string "Timezone"
+            default "CLT3CLST,M10.2.0/00:00,M3.2.0/00:00"
+            help
+                Timezone en formato POSIX. Chile: CLT3CLST,M10.2.0/00:00,M3.2.0/00:00
+    endmenu
+
 endmenu
