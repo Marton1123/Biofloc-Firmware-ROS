@@ -405,10 +405,6 @@ idf.py build
 - R² calibración: 0.9997 (ajuste casi perfecto)
 - Error máximo en buffers: 0.049 pH
 
-## 📜 Licencia
-
-MIT License - [@Marton1123](https://github.com/Marton1123)
-
 ## 👤 Autor
 
 **Marton1123**
