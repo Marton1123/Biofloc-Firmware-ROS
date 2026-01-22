@@ -1,0 +1,24 @@
+# ==============================================================================
+# Biofloc Sensor DB Bridge - Configuración
+# ==============================================================================
+# Copiar este archivo a ~/.biofloc/config.yaml y ajustar valores
+# O usar variables de entorno: BIOFLOC_MONGODB_URI, etc.
+# ==============================================================================
+
+# MongoDB Connection
+mongodb:
+  uri: "mongodb://localhost:27017/"
+  # Para autenticación: "mongodb://usuario:password@host:27017/"
+  # Para replica set: "mongodb://host1:27017,host2:27017/?replicaSet=rs0"
+  database: "SistemasLab"
+  collection: "monitoreo.telemetria"
+
+# ROS 2 Configuration  
+ros:
+  topic: "/biofloc/sensor_data"
+  namespace: "biofloc"
+
+# Logging
+logging:
+  log_data: true
+  log_level: "INFO"  # DEBUG, INFO, WARN, ERROR

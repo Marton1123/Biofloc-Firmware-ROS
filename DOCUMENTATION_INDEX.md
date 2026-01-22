@@ -1,244 +1,212 @@
-# 📚 Índice de Documentación - Biofloc Firmware ROS v2.2.0
+# 📚 Índice de Documentación — Biofloc Firmware ROS v2.3.0
 
-**Total de documentación:** 1923 líneas | 48.5 KB  
-**Última actualización:** 21 de Enero, 2026
+> **Cumplimiento de Estándares:** ISO/IEC 26514 (Documentación de Software) | IEEE 1063 (Documentación de Usuario)
 
----
-
-## 🗺️ Guía de Navegación
-
-### 🚀 Para Empezar (Usuarios Nuevos)
-
-1. **[QUICKSTART.md](QUICKSTART.md)** ⭐ COMENZAR AQUÍ
-   - Instalación desde cero (30 minutos)
-   - Configuración básica
-   - Primeros pasos
-   - Troubleshooting rápido
-   - **Recomendado para:** Nuevos usuarios, setup inicial
-
-2. **[README.md](README.md)** 📖 REFERENCIA PRINCIPAL
-   - Documentación completa del proyecto
-   - Características del sistema
-   - Quick start resumido
-   - Calibración de pH (resumen)
-   - MongoDB bridge setup
-   - Troubleshooting completo
-   - Especificaciones técnicas
-   - **Recomendado para:** Entender el sistema completo
+| Metadatos | Valor |
+|-----------|-------|
+| **Versión** | 2.3.0 |
+| **Última Actualización** | 2026-01-22 |
+| **Autor** | [@Marton1123](https://github.com/Marton1123) |
 
 ---
 
-### 🎯 Para Calibración (Técnicos)
+## 📋 Tabla de Contenidos
 
-3. **[docs/CALIBRATION.md](docs/CALIBRATION.md)** 🔬 GUÍA PROFESIONAL
-   - Teoría de operación del sensor CWT-BL
-   - Proceso de calibración de 3 puntos (detallado)
-   - Mejores prácticas y tips
-   - Troubleshooting avanzado
-   - Interpretación de resultados
-   - **Recomendado para:** Calibración profesional, troubleshooting sensor
-
-4. **[calibration_3point_result.txt](calibration_3point_result.txt)** 📊 RESULTADOS ACTUALES
-   - Parámetros de calibración aplicados
-   - Valores de los 3 puntos
-   - Errores por punto
-   - Verificación en agua real
-   - **Recomendado para:** Consulta rápida de parámetros
+1. [Referencia Rápida](#-referencia-rápida)
+2. [Documentación por Rol](#-documentación-por-rol)
+3. [Índice por Tema](#-índice-por-tema)
+4. [Rutas de Aprendizaje](#-rutas-de-aprendizaje)
+5. [Matriz de Troubleshooting](#-matriz-de-troubleshooting)
+6. [Estadísticas de Documentación](#-estadísticas-de-documentación)
 
 ---
 
-### 📊 Para Administración (Gerentes de Proyecto)
+## ⚡ Referencia Rápida
 
-5. **[PROJECT_STATUS.md](PROJECT_STATUS.md)** 📈 ESTADO DEL PROYECTO
-   - Objetivos y cumplimiento
-   - Métricas de calidad
-   - Componentes del sistema (diagramas)
-   - Roadmap futuro
-   - Issues conocidos
-   - Logros destacados
-   - **Recomendado para:** Reportes, reuniones, decisiones estratégicas
-
-6. **[CHANGELOG.md](CHANGELOG.md)** 📝 HISTORIAL COMPLETO
-   - Versión por versión desde v1.0.0
-   - Cambios detallados en v2.2.0
-   - Correcciones de bugs
-   - Mejoras de performance
-   - **Recomendado para:** Entender evolución del proyecto, auditorías
+| Necesidad | Documento | Sección |
+|-----------|-----------|---------|
+| **🚀 Ejecutar el proyecto** | [GUIA_PASO_A_PASO.md](GUIA_PASO_A_PASO.md) | Completo |
+| **Instalación inicial** | [QUICKSTART.md](QUICKSTART.md) | Instalación |
+| **Sistema no responde** | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Procedimiento de Recuperación |
+| **Calibración de pH** | [docs/CALIBRATION.md](docs/CALIBRATION.md) | Calibración 3 Puntos |
+| **Parámetros actuales** | [calibration_3point_result.txt](calibration_3point_result.txt) | Completo |
+| **Referencia de API** | [main/sensors.h](main/sensors.h) | Documentación de Funciones |
+| **Estado del proyecto** | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Métricas |
+| **Guías de seguridad** | [docs/SECURITY.md](docs/SECURITY.md) | Completo |
 
 ---
 
-### 🔧 Para Mantenimiento (DevOps/SRE)
+## 👥 Documentación por Rol
 
-7. **[TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md)** ⚙️ REFERENCIA TÉCNICA
-   - Parámetros de calibración actuales
-   - Configuración completa (sdkconfig, .env)
-   - Formato de datos MongoDB
-   - Herramientas de mantenimiento
-   - Troubleshooting rápido
-   - Checklist de puesta en marcha
-   - Mantenimiento recomendado
-   - **Recomendado para:** Operaciones diarias, maintenance, soporte
+### 🆕 Usuarios Nuevos — Primeros Pasos
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| **1** | [**GUIA_PASO_A_PASO.md**](GUIA_PASO_A_PASO.md) | **Comandos para ejecutar paso a paso** | **15 min** |
+| 2 | [QUICKSTART.md](QUICKSTART.md) | Instalación y primera ejecución | 30 min |
+| 3 | [README.md](README.md) | Visión general del sistema | 15 min |
+| 4 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Problemas comunes | Referencia |
+
+### 🔬 Técnicos de Calibración
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| 1 | [GUIA_PASO_A_PASO.md § Calibración](GUIA_PASO_A_PASO.md#4-calibración-del-sensor-de-ph) | Comandos de calibración | 10 min |
+| 2 | [docs/CALIBRATION.md](docs/CALIBRATION.md) | Teoría y procedimiento de calibración | 1 hr |
+| 3 | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | Parámetros actuales | 10 min |
+| 4 | [calibration_3point_result.txt](calibration_3point_result.txt) | Datos de calibración activa | 5 min |
+
+### 💻 Desarrolladores de Firmware
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| 1 | [README.md](README.md) | Visión general de arquitectura | 20 min |
+| 2 | [main/sensors.h](main/sensors.h) | Documentación de API | 30 min |
+| 3 | [CHANGELOG.md](CHANGELOG.md) | Historial de versiones | 15 min |
+| 4 | [docs/SECURITY.md](docs/SECURITY.md) | Guías de seguridad | 15 min |
+
+### 🔧 DevOps / Administradores de Sistemas
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| 1 | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | Referencia de configuración | 20 min |
+| 2 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Procedimientos de recuperación | Referencia |
+| 3 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Métricas de salud del sistema | 10 min |
+
+### 📊 Gerentes de Proyecto
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| 1 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Estado y roadmap | 15 min |
+| 2 | [CHANGELOG.md](CHANGELOG.md) | Historial de releases | 10 min |
 
 ---
 
-## 📑 Tabla de Contenidos por Tema
+## 📑 Índice por Tema
+
+### Ejecución del Sistema
+- [**GUIA_PASO_A_PASO.md**](GUIA_PASO_A_PASO.md) — Comandos paso a paso
+- [GUIA_PASO_A_PASO.md § Uso Diario](GUIA_PASO_A_PASO.md#3-uso-diario) — Comandos frecuentes
+- [GUIA_PASO_A_PASO.md § Solución de Problemas](GUIA_PASO_A_PASO.md#5-solución-de-problemas-rápida)
 
 ### Hardware y Sensores
-- [README.md - Requisitos Hardware](README.md#-requisitos)
-- [README.md - Especificaciones Técnicas](README.md#-especificaciones-técnicas)
-- [TECHNICAL_SUMMARY.md - Componentes del Sistema](TECHNICAL_SUMMARY.md#-componentes-del-sistema)
-- [PROJECT_STATUS.md - Hardware (ESP32)](PROJECT_STATUS.md#-componentes-del-sistema)
+- [README.md § Requisitos de Hardware](README.md#-requisitos)
+- [README.md § Especificaciones Técnicas](README.md#-especificaciones-técnicas)
+- [docs/CALIBRATION.md § Sensor CWT-BL](docs/CALIBRATION.md)
+- [TECHNICAL_SUMMARY.md § Divisor de Voltaje](TECHNICAL_SUMMARY.md)
 
 ### Calibración de pH
-- [README.md - Calibración del Sensor de pH](README.md#-calibración-del-sensor-de-ph)
-- [docs/CALIBRATION.md - Guía Completa](docs/CALIBRATION.md)
-- [QUICKSTART.md - Calibración (Proceso)](QUICKSTART.md#-calibración-del-sensor-importante)
-- [TECHNICAL_SUMMARY.md - Parámetros de Calibración](TECHNICAL_SUMMARY.md#-parámetros-de-calibración-actuales)
-- [calibration_3point_result.txt - Resultados](calibration_3point_result.txt)
+- [docs/CALIBRATION.md](docs/CALIBRATION.md) — Guía completa
+- [QUICKSTART.md § Calibración](QUICKSTART.md) — Procedimiento rápido
+- [calibration_3point_result.txt](calibration_3point_result.txt) — Valores actuales
+- [main/sensors.h § API de Calibración](main/sensors.h) — Interfaz de código
 
 ### Instalación y Configuración
-- [QUICKSTART.md - Instalación Completa](QUICKSTART.md#-instalación-completa-primera-vez)
-- [README.md - Quick Start](README.md#-quick-start)
-- [TECHNICAL_SUMMARY.md - Configuración del Sistema](TECHNICAL_SUMMARY.md#-configuración-del-sistema)
+- [QUICKSTART.md § Instalación](QUICKSTART.md) — Paso a paso
+- [README.md § Quick Start](README.md#-quick-start) — Resumen
+- [TECHNICAL_SUMMARY.md § Configuración](TECHNICAL_SUMMARY.md) — Todos los parámetros
+- [main/Kconfig.projbuild](main/Kconfig.projbuild) — Opciones de menuconfig
+
+### Seguridad
+- [docs/SECURITY.md](docs/SECURITY.md) — Guías completas de seguridad
+- Gestión de credenciales
+- Seguridad de red
+- Prácticas de código seguro
+
+### micro-ROS y ROS 2
+- [README.md § micro-ROS Agent](README.md)
+- [docs/TROUBLESHOOTING.md § Conexión del Agent](docs/TROUBLESHOOTING.md)
+- [TECHNICAL_SUMMARY.md § Configuración de Red](TECHNICAL_SUMMARY.md)
 
 ### MongoDB y Telemetría
-- [README.md - MongoDB Bridge](README.md#-mongodb-bridge-almacenamiento-de-datos)
-- [TECHNICAL_SUMMARY.md - Formato de Datos](TECHNICAL_SUMMARY.md#-configuración-del-sistema)
-- [PROJECT_STATUS.md - Software Stack](PROJECT_STATUS.md#-componentes-del-sistema)
-
-### Troubleshooting
-- [README.md - Troubleshooting Completo](README.md#-troubleshooting)
-- [QUICKSTART.md - Troubleshooting Común](QUICKSTART.md#-troubleshooting-común)
-- [TECHNICAL_SUMMARY.md - Troubleshooting Rápido](TECHNICAL_SUMMARY.md#-troubleshooting-rápido)
-- [docs/CALIBRATION.md - Troubleshooting Sensor](docs/CALIBRATION.md)
-
-### Desarrollo y Arquitectura
-- [README.md - Estructura del Proyecto](README.md#-estructura-del-proyecto)
-- [README.md - Extender el Firmware](README.md#-extender-el-firmware)
-- [PROJECT_STATUS.md - Archivos del Proyecto](PROJECT_STATUS.md#-archivos-del-proyecto)
-- [CHANGELOG.md - Historial de Cambios](CHANGELOG.md)
+- [README.md § MongoDB Bridge](README.md#-mongodb-bridge-almacenamiento-de-datos)
+- [TECHNICAL_SUMMARY.md § Formato de Datos](TECHNICAL_SUMMARY.md)
+- [scripts/sensor_db_bridge.py](scripts/sensor_db_bridge.py) — Código fuente del bridge
 
 ---
 
 ## 🎓 Rutas de Aprendizaje
 
-### Ruta 1: Usuario Final (Operador del Sistema)
-1. [QUICKSTART.md](QUICKSTART.md) - Setup inicial
-2. [README.md - MongoDB Bridge](README.md#-mongodb-bridge-almacenamiento-de-datos) - Ver datos
-3. [QUICKSTART.md - Troubleshooting](QUICKSTART.md#-troubleshooting-común) - Resolver problemas
-4. [TECHNICAL_SUMMARY.md - Mantenimiento](TECHNICAL_SUMMARY.md#-mantenimiento-recomendado) - Rutinas
+### Ruta 1: Operador del Sistema (2 horas)
+```
+QUICKSTART.md → README.md (Visión General) → docs/TROUBLESHOOTING.md → TECHNICAL_SUMMARY.md (Mantenimiento)
+```
 
-**Tiempo estimado:** 2 horas
+### Ruta 2: Especialista en Calibración (4 horas + práctica)
+```
+docs/CALIBRATION.md → QUICKSTART.md (Calibración) → TECHNICAL_SUMMARY.md (Herramientas) → Práctica con buffers
+```
 
-### Ruta 2: Técnico de Calibración
-1. [docs/CALIBRATION.md](docs/CALIBRATION.md) - Teoría completa
-2. [QUICKSTART.md - Calibración](QUICKSTART.md#-calibración-del-sensor-importante) - Proceso
-3. [TECHNICAL_SUMMARY.md - Herramientas](TECHNICAL_SUMMARY.md#-herramientas-de-mantenimiento) - Scripts
-4. [README.md - Troubleshooting pH](README.md#-troubleshooting) - Diagnóstico
+### Ruta 3: Desarrollador de Firmware (6 horas)
+```
+README.md → main/sensors.h → main/sensors.c → CHANGELOG.md → docs/SECURITY.md
+```
 
-**Tiempo estimado:** 4 horas + práctica
-
-### Ruta 3: Desarrollador de Firmware
-1. [README.md](README.md) - Visión general
-2. [PROJECT_STATUS.md - Arquitectura](PROJECT_STATUS.md#-componentes-del-sistema) - Componentes
-3. [CHANGELOG.md](CHANGELOG.md) - Evolución del código
-4. [README.md - Extender Firmware](README.md#-extender-el-firmware) - API
-
-**Tiempo estimado:** 6 horas
-
-### Ruta 4: DevOps/Administrador de Sistemas
-1. [QUICKSTART.md - Instalación](QUICKSTART.md#-instalación-completa-primera-vez) - Setup
-2. [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) - Configuración completa
-3. [README.md - MongoDB](README.md#-mongodb-bridge-almacenamiento-de-datos) - Base de datos
-4. [PROJECT_STATUS.md](PROJECT_STATUS.md) - Métricas y estado
-
-**Tiempo estimado:** 3 horas
-
-### Ruta 5: Gerente de Proyecto
-1. [PROJECT_STATUS.md](PROJECT_STATUS.md) - Estado actual
-2. [CHANGELOG.md](CHANGELOG.md) - Historial y logros
-3. [README.md - Características](README.md#-características) - Features
-4. [PROJECT_STATUS.md - Roadmap](PROJECT_STATUS.md#-roadmap-futuro) - Futuro
-
-**Tiempo estimado:** 1 hora
+### Ruta 4: Ingeniero DevOps (3 horas)
+```
+QUICKSTART.md → TECHNICAL_SUMMARY.md → docs/TROUBLESHOOTING.md → PROJECT_STATUS.md
+```
 
 ---
 
-## 🔍 Búsqueda Rápida por Problema
+## 🔍 Matriz de Troubleshooting
 
-| Problema | Documento | Sección |
-|----------|-----------|---------|
-| pH fuera de rango | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md#-troubleshooting-rápido) | Troubleshooting Rápido |
-| WiFi no conecta | [QUICKSTART.md](QUICKSTART.md#-troubleshooting-común) | ❌ "WiFi connection failed" |
-| MongoDB no guarda | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md#-troubleshooting-rápido) | MongoDB no guarda datos |
-| Sensor no estabiliza | [docs/CALIBRATION.md](docs/CALIBRATION.md) | Troubleshooting |
-| Error de calibración | [README.md](README.md#-troubleshooting) | pH Sensor |
-| Timestamps incorrectos | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md#-troubleshooting-rápido) | Timestamps incorrectos |
-| Agent unreachable | [QUICKSTART.md](QUICKSTART.md#-troubleshooting-común) | ❌ "Agent unreachable" |
-| Instalación ESP-IDF | [QUICKSTART.md](QUICKSTART.md#-instalación-completa-primera-vez) | Instalar ESP-IDF |
-| Configurar timezone | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md#-configuración-del-sistema) | ESP32 (sdkconfig) |
-| Ver especificaciones | [README.md](README.md#-especificaciones-técnicas) | Especificaciones Técnicas |
+| Síntoma | Causa Probable | Documento | Sección |
+|---------|----------------|-----------|---------|
+| Sistema no responde | Agent no está corriendo | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Recuperación |
+| pH fuera de rango (>14, <0) | Divisor de voltaje mal configurado | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | Troubleshooting |
+| Error de pH >0.3 | Necesita recalibración | [CALIBRATION.md](docs/CALIBRATION.md) | Calibración 3 Puntos |
+| Conexión WiFi fallida | Credenciales incorrectas | [QUICKSTART.md](QUICKSTART.md) | Troubleshooting |
+| Agent inalcanzable | IP/Puerto no coinciden | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Red |
+| MongoDB no guarda | Credenciales/whitelist | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | MongoDB |
+| Timestamps incorrectos | Configuración de timezone | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | Configuración |
+| Errores de compilación | Build sucio | [README.md](README.md) | Troubleshooting |
 
 ---
 
 ## 📊 Estadísticas de Documentación
 
-| Documento | Líneas | Tamaño | Tipo | Audiencia |
-|-----------|--------|--------|------|-----------|
-| README.md | 400+ | 13 KB | Referencia | Todos |
-| QUICKSTART.md | 350+ | 7.9 KB | Tutorial | Nuevos usuarios |
-| CHANGELOG.md | 300+ | 7.2 KB | Historial | Desarrolladores |
-| PROJECT_STATUS.md | 280+ | 9.1 KB | Reporte | Gerencia |
-| TECHNICAL_SUMMARY.md | 250+ | 6.5 KB | Referencia | Técnicos |
-| docs/CALIBRATION.md | 334 | 7.0 KB | Guía | Calibradores |
-| calibration_3point_result.txt | 29 | 0.8 KB | Datos | Técnicos |
-| **TOTAL** | **1923+** | **48.5 KB** | - | - |
+| Documento | Líneas | Tamaño | Audiencia | Última Actualización |
+|-----------|--------|--------|-----------|---------------------|
+| README.md | 400+ | 13 KB | Todos | 2026-01-22 |
+| QUICKSTART.md | 350+ | 8 KB | Usuarios Nuevos | 2026-01-22 |
+| CHANGELOG.md | 300+ | 7 KB | Desarrolladores | 2026-01-22 |
+| PROJECT_STATUS.md | 280+ | 9 KB | Gerencia | 2026-01-22 |
+| TECHNICAL_SUMMARY.md | 250+ | 7 KB | Técnicos | 2026-01-22 |
+| docs/CALIBRATION.md | 350+ | 8 KB | Calibradores | 2026-01-22 |
+| docs/TROUBLESHOOTING.md | 300+ | 7 KB | Todos | 2026-01-22 |
+| docs/SECURITY.md | 200+ | 5 KB | Desarrolladores | 2026-01-22 |
+| **Total** | **2400+** | **64 KB** | — | — |
 
 ---
 
-## 🏷️ Etiquetas por Documento
+## 📝 Estándares de Documentación
 
-### README.md
-`#principal` `#referencia-completa` `#features` `#quickstart` `#mongodb` `#troubleshooting` `#specs`
+Esta documentación sigue:
 
-### QUICKSTART.md
-`#tutorial` `#instalacion` `#setup` `#calibracion-basica` `#troubleshooting-comun` `#nuevos-usuarios`
+- **IEEE 1063-2001** — Estándar para Documentación de Usuario de Software
+- **ISO/IEC 26514:2008** — Ingeniería de sistemas y software - Documentación de usuario
+- **Semantic Versioning 2.0.0** — Numeración de versiones
+- **Keep a Changelog 1.0.0** — Formato de changelog
+- **CommonMark** — Especificación de Markdown
 
-### CHANGELOG.md
-`#historial` `#versiones` `#releases` `#bugfixes` `#features-nuevas` `#desarrolladores`
+### Convenciones Utilizadas
 
-### PROJECT_STATUS.md
-`#estado` `#metricas` `#objetivos` `#roadmap` `#issues` `#gerencia` `#reportes`
-
-### TECHNICAL_SUMMARY.md
-`#referencia-tecnica` `#parametros` `#configuracion` `#mantenimiento` `#devops` `#sre`
-
-### docs/CALIBRATION.md
-`#calibracion-profesional` `#teoria` `#procedimiento` `#mejores-practicas` `#troubleshooting-avanzado`
-
-### calibration_3point_result.txt
-`#resultados` `#parametros-actuales` `#datos-calibracion` `#consulta-rapida`
-
----
-
-## 💡 Tips de Uso
-
-1. **Usa Ctrl+F (Find)** para buscar palabras clave en los documentos
-2. **Enlaces internos** funcionan en GitHub y editores markdown
-3. **Actualiza este índice** si agregas nuevos documentos
-4. **Formato markdown** se ve mejor en: GitHub, VS Code, Typora, etc.
-5. **Exporta a PDF** si necesitas versión imprimible
+| Convención | Significado |
+|------------|-------------|
+| `código` | Comandos, código, nombres de archivo |
+| **negrita** | Términos importantes, elementos de UI |
+| *cursiva* | Énfasis, variables |
+| > cita | Notas, advertencias |
+| ⚠️ | Advertencia |
+| ✅ | Éxito/Verificado |
+| ❌ | Error/Falla |
 
 ---
 
-## 📞 Soporte
+## 🔄 Historial de Versiones
 
-**Documentación desactualizada?** Por favor reportar en GitHub Issues  
-**Falta información?** Sugerencias bienvenidas en Pull Requests  
-**Preguntas técnicas?** Consultar [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md)
+| Versión | Fecha | Cambios |
+|---------|-------|---------|
+| 1.1.0 | 2026-01-22 | Agregado TROUBLESHOOTING.md, SECURITY.md, estándares profesionales |
+| 1.0.0 | 2026-01-21 | Índice de documentación inicial |
 
 ---
 
-**Versión del índice:** 1.0.0  
-**Compatible con:** Biofloc Firmware ROS v2.2.0  
-**Última revisión:** 21 de Enero, 2026
+**Mantenido por:** Biofloc Engineering Team  
+**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/biofloc/Biofloc-Firmware-ROS)

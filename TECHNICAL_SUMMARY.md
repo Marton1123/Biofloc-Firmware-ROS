@@ -1,8 +1,13 @@
-# Resumen Técnico - Sistema de Telemetría pH v2.2.0
+# Resumen Técnico — Sistema de Telemetría pH v2.2.0
 
-**Fecha:** 21 de Enero, 2026  
-**Estado:** ✅ Sistema operacional con calibración profesional  
-**Precisión lograda:** ±0.03 pH (99.4% accuracy)
+> **Estándares:** ISO/IEC 25010 (Calidad de Software) | IEEE 829 (Documentación de Pruebas)
+
+| Metadatos | Valor |
+|-----------|-------|
+| **Versión** | 2.2.0 |
+| **Fecha** | 2026-01-22 |
+| **Estado** | ✅ Operacional |
+| **Precisión pH** | ±0.03 pH (99.4%) |
 
 ---
 
@@ -245,5 +250,5 @@ python3 scripts/diagnose_ph.py
 
 ---
 
-**Última actualización:** 21 de Enero, 2026  
+**Última actualización:** 2026-01-22  
 **Próxima revisión:** Trimestral (Abril 2026)

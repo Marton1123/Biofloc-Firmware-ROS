@@ -2,7 +2,15 @@
 
 Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **ESP-IDF v5.3** y **MongoDB Atlas**.
 
-**Version:** 2.2.0 (pH Calibration System)
+**Versión:** 2.3.0 (Bridge Fix + Documentation)
+
+---
+
+## 🚀 ¿Primera vez? Empieza aquí
+
+👉 **[GUÍA PASO A PASO](GUIA_PASO_A_PASO.md)** — Instrucciones completas para ejecutar el proyecto
+
+---
 
 ## ✨ Características
 
@@ -130,68 +138,76 @@ python3 scripts/diagnose_ph.py
 1. **Crear archivo `.env` en el directorio `scripts/`:**
 
 ```bash
-MONGODB_URI=mongodb+srv://sistemaslab:PASSWORD@sistemaslab.hk30i2k.mongodb.net/?retryWrites=true&w=majority&appName=SistemasLab
-MONGODB_DB=SistemasLab
+cd /home/Biofloc-Firmware-ROS/scripts
+cp .env.example .env
+nano .env  # Editar MONGODB_URI con tu conexión
+```
+
+**Contenido del `.env`:**
+```bash
+MONGODB_URI=mongodb+srv://usuario:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DATABASE=SistemasLab
 MONGODB_COLLECTION=telemetria
+ROS_TOPIC=/biofloc/sensor_data
+LOG_DATA=true
 ```
 
 2. **Instalar dependencias:**
 
 ```bash
-cd scripts
-python3 -m venv .venv
-source .venv/bin/activate
 pip install pymongo python-dotenv
 ```
 
-### Uso
+### Uso (3 Terminales)
 
-1. **Iniciar micro-ROS Agent:**
-
+**Terminal 1 — micro-ROS Agent:**
 ```bash
+source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
 ```
 
-2. **En otra terminal, iniciar el bridge:**
-
+**Terminal 2 — Ver datos (opcional):**
 ```bash
-cd /home/Biofloc-Firmware-ROS
-source scripts/.venv/bin/activate
-python3 scripts/sensor_db_bridge.py
+source /opt/ros/jazzy/setup.bash
+ros2 topic echo /biofloc/sensor_data std_msgs/msg/String
 ```
 
-3. **Verificar datos en MongoDB Atlas:**
-   - Base de datos: `SistemasLab`
-   - Colección: `telemetria`
-   - Formato de documento:
-     ```json
-     {
-       "timestamp": "2026-01-21T17:15:42-0300",
-       "ph": 7.08,
-       "temperature": 2.26,
-       "device_id": "biofloc_esp32_c8e0",
-       "location": "tanque_01",
-       "_ros_topic": "/biofloc/sensor_data"
-     }
-     ```
+**Terminal 3 — Guardar en MongoDB:**
+```bash
+cd /home/Biofloc-Firmware-ROS/scripts
+source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash
+python3 sensor_db_bridge.py
+```
+
+### Formato de Documento en MongoDB
+
+```json
+{
+  "device_id": "biofloc_esp32_c8e0",
+  "location": "tanque_01",
+  "timestamp": "2026-01-22T16:34:17-0300",
+  "sensors": {
+    "ph": { "value": 7.06, "voltage": 2.58, "unit": "pH", "valid": true },
+    "temperature": { "value": 22.2, "voltage": 2.10, "unit": "C", "valid": true }
+  },
+  "_ros_topic": "/biofloc/sensor_data"
+}
+```
 
 ### Notas Importantes
 
 - **Timezone:** El ESP32 usa **CLT3** (GMT-3 fijo, Chile)
 - **Timestamp:** Generado por el ESP32 después de sincronizar con NTP
-- **No hay `_received_at`:** Se eliminó por redundante (usamos solo timestamp del dispositivo)
 - **Tasa de guardado:** ~1 mensaje cada 4 segundos (250 msg/hora)
-- **Success rate:** 100% (sin pérdida de datos)
+- **Success rate:** 100% (verificado con 17,000+ documentos)
 
-## 🖥️ micro-ROS Agent (Manual)
+## 🖥️ micro-ROS Agent
 
-En tu PC/host con ROS 2 Jazzy:
+En tu PC con ROS 2 Jazzy (compilado localmente en `~/microros_ws/`):
 
 ```bash
-# Opción 1: Docker (recomendado)
-docker run -it --rm --net=host microros/micro-ros-agent:jazzy udp4 --port 8888 -v6
-
-# Opción 2: Desde source
+source /opt/ros/jazzy/setup.bash
+source ~/microros_ws/install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 -v6
 ```
 
@@ -199,27 +215,36 @@ ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 -v6
 
 ```
 Biofloc-Firmware-ROS/
+├── GUIA_PASO_A_PASO.md              # 🚀 Guía de ejecución paso a paso
+├── README.md                        # Este archivo
 ├── CMakeLists.txt                   # CMake raíz del proyecto ESP-IDF
 ├── sdkconfig                        # Configuración actual del proyecto
-├── sdkconfig.defaults               # Configuración por defecto
 ├── partitions.csv                   # Tabla de particiones (2MB flash)
-├── components/
-│   └── micro_ros_espidf_component/  # Componente micro-ROS Jazzy (rama jazzy)
+├── calibration_3point_result.txt    # Resultados de última calibración
+│
 ├── main/
-│   ├── CMakeLists.txt               # CMake del componente main
-│   ├── Kconfig.projbuild            # Configuración para menuconfig
-│   └── main.c                       # Firmware principal v2.2.0
-├── docs/
-│   └── CALIBRATION.md               # Guía completa de calibración de pH
+│   ├── main.c                       # Firmware principal v2.2.0
+│   ├── sensors.c                    # Driver de sensores CWT-BL
+│   ├── sensors.h                    # API de sensores
+│   ├── CMakeLists.txt               # CMake del componente
+│   └── Kconfig.projbuild            # Opciones de menuconfig
+│
 ├── scripts/
-│   ├── .venv/                       # Entorno virtual Python
-│   ├── .env                         # Configuración MongoDB (no commiteado)
-│   ├── monitor_voltage.py           # Monitor de voltaje en tiempo real
-│   ├── calibrate_ph_3points.py      # Calibración profesional 3 puntos
-│   ├── diagnose_ph.py               # Diagnóstico del sensor
-│   ├── fix_voltage_divider.py       # Corrección divisor de voltaje
-│   └── sensor_db_bridge.py          # Bridge ROS 2 → MongoDB
-└── calibration_3point_result.txt    # Resultados de calibración
+│   ├── sensor_db_bridge.py          # 🗄️ Bridge ROS 2 → MongoDB
+│   ├── calibrate_ph.py              # 🎯 Calibración de pH (3 puntos)
+│   ├── monitor_sensores.py          # 📊 Monitor en tiempo real
+│   ├── monitor_temperature.py       # 🌡️ Monitor de temperatura
+│   ├── check_mongodb.py             # ✅ Verificar conexión MongoDB
+│   ├── .env.example                 # Plantilla de configuración
+│   └── .env                         # Credenciales (NO en git)
+│
+├── docs/
+│   ├── CALIBRATION.md               # Guía de calibración de pH
+│   ├── TROUBLESHOOTING.md           # Solución de problemas
+│   └── SECURITY.md                  # Guías de seguridad
+│
+└── components/
+    └── micro_ros_espidf_component/  # Componente micro-ROS Jazzy
 ```
 
 ## ⚙️ Configuración Kconfig
@@ -382,4 +407,10 @@ idf.py build
 
 ## 📜 Licencia
 
-MIT License - Biofloc Engineering Team
+MIT License - [@Marton1123](https://github.com/Marton1123)
+
+## 👤 Autor
+
+**Marton1123**
+- GitHub: [@Marton1123](https://github.com/Marton1123)
+- Repositorio: [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)

@@ -1,23 +1,25 @@
-#!/home/Biofloc-Firmware-ROS/scripts/.venv/bin/python3
+#!/usr/bin/env python3
 """
-Biofloc Sensor DB Bridge - ROS 2 Node for MongoDB Telemetry Storage.
+Biofloc Sensor DB Bridge — Puente ROS 2 a MongoDB.
 
-This node subscribes to /biofloc/sensor_data and stores JSON telemetry
-in MongoDB database: SistemasLab.telemetria
+Suscribe a /biofloc/sensor_data (JSON) y almacena en MongoDB Atlas.
 
-Usage:
-    # 1. Configure credentials in .env file
+Uso:
+    # 1. Configurar credenciales
     cp scripts/.env.example scripts/.env
     nano scripts/.env
     
-    # 2. Run the node
-    python3 scripts/sensor_db_bridge.py
+    # 2. Ejecutar (con ROS 2 y Agent corriendo)
+    cd /home/Biofloc-Firmware-ROS/scripts
+    source /opt/ros/jazzy/setup.bash
+    source ~/microros_ws/install/local_setup.bash
+    python3 sensor_db_bridge.py
 
-Dependencies:
-    pip install pymongo python-dotenv rclpy
+Dependencias:
+    pip install pymongo python-dotenv
 
-Author: Biofloc Engineering Team
-Date: 2026
+Autor: @Marton1123
+Versión: 2.3.0 (Corregido para JSON String)
 """
 
 import json
@@ -98,7 +100,7 @@ class SensorDBBridge(Node):
         else:
             self.get_logger().error("pymongo not available - data will only be logged")
         
-        # Subscribe to sensor topic
+        # Subscribe to sensor topic (JSON String)
         self.subscription = self.create_subscription(
             String,
             self.topic_name,
@@ -144,24 +146,55 @@ class SensorDBBridge(Node):
             return False
     
     def sensor_callback(self, msg: String):
-        """Process incoming sensor messages."""
+        """Process incoming JSON sensor messages."""
         self.messages_received += 1
         
         try:
-            # Parse JSON
+            # Parse JSON from String message
             data = json.loads(msg.data)
             
-            # Add topic metadata
-            data['_ros_topic'] = self.topic_name
+            # Extract sensor values
+            sensors = data.get('sensors', {})
+            ph_data = sensors.get('ph', {})
+            temp_data = sensors.get('temperature', {})
+            
+            temperature = temp_data.get('value', 0)
+            ph = ph_data.get('value', 0)
+            
+            # Validate sensor ranges
+            temp_valid = -20 <= temperature <= 80
+            ph_valid = 0 <= ph <= 14
+            
+            # Create document (preserve original JSON structure from ESP32)
+            doc = {
+                'device_id': data.get('device_id', 'biofloc_esp32'),
+                'location': data.get('location', 'lab'),
+                'timestamp': data.get('timestamp', datetime.now().isoformat()),
+                'sensors': {
+                    'temperature': {
+                        'value': round(temperature, 2),
+                        'unit': temp_data.get('unit', 'C'),
+                        'valid': temp_valid,
+                        'voltage': temp_data.get('voltage', 0)
+                    },
+                    'ph': {
+                        'value': round(ph, 2),
+                        'unit': ph_data.get('unit', 'pH'),
+                        'valid': ph_valid,
+                        'voltage': ph_data.get('voltage', 0)
+                    }
+                },
+                '_ros_topic': self.topic_name,
+            }
             
             # Log sensor data
             if self.log_data:
-                self._log_sensor_data(data)
+                self._log_sensor_data(doc)
             
             # Save to MongoDB
             if self.mongodb_connected and self.collection is not None:
                 try:
-                    result = self.collection.insert_one(data)
+                    result = self.collection.insert_one(doc)
                     if result.inserted_id:
                         self.messages_saved += 1
                         self.get_logger().debug(f"Saved document: {result.inserted_id}")
@@ -183,8 +216,7 @@ class SensorDBBridge(Node):
                     self._connect_mongodb()
                     
         except json.JSONDecodeError as e:
-            self.get_logger().error(f"Invalid JSON received: {e}")
-            self.get_logger().debug(f"Raw data: {msg.data[:200]}")
+            self.get_logger().error(f"JSON parse error: {e}")
             self.messages_failed += 1
         except Exception as e:
             self.get_logger().error(f"Error processing message: {e}")

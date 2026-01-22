@@ -5,6 +5,43 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.3.0] - 2026-01-22
+
+### 🎯 Resumen
+Corrección del bridge ROS 2 → MongoDB y mejora de documentación con guía paso a paso.
+
+### ✨ Added
+- **Guía paso a paso (`GUIA_PASO_A_PASO.md`):**
+  - Instrucciones detalladas para ejecutar el proyecto completo
+  - Comandos copiables para cada terminal
+  - Sección de solución de problemas rápida
+  - Script de verificación del sistema
+
+- **Nuevos scripts:**
+  - `scripts/monitor_sensores.py`: Monitor mejorado con estadísticas
+  - `scripts/check_mongodb.py`: Verificador de conexión MongoDB
+
+### 🔧 Changed
+- **Bridge MongoDB (`sensor_db_bridge.py`):**
+  - Corregido: Ahora usa `String` (JSON) en vez de `Float32MultiArray`
+  - Preserva estructura JSON original del ESP32
+  - Incluye voltajes en el documento guardado
+  
+- **Documentación:**
+  - README.md actualizado con comandos correctos (sin Docker)
+  - Estructura del proyecto actualizada
+  - Información del autor: @Marton1123
+
+### 🗑️ Removed
+- `sensor_db_bridge_v2.py` (duplicado)
+- Referencias a Docker (no se usa en este proyecto)
+
+### 🐛 Fixed
+- Bridge no recibía datos (usaba tipo de mensaje incorrecto)
+- Import duplicado de `json` en sensor_db_bridge.py
+
+---
+
 ## [2.2.0] - 2026-01-21
 
 ### 🎯 Resumen
@@ -12,40 +49,29 @@ Versión de calibración profesional del sensor de pH. Se logró reducir el erro
 
 ### ✨ Added
 - **Sistema de calibración de 3 puntos:**
-  - `scripts/calibrate_ph_3points.py`: Calibración automatizada con buffers pH 4.01, 6.86, 9.18
+  - `scripts/calibrate_ph.py`: Calibración automatizada con buffers pH 4.01, 6.86, 9.18
   - Timeout extendido: 420 segundos (7 minutos) por buffer
   - Criterio de estabilidad: σ < 0.002V durante 50 segundos
   - Tiempo mínimo de espera: 180 segundos (3 minutos) antes de verificar estabilidad
   - Cálculo de R² para validar calidad del ajuste lineal
   
 - **Herramientas de diagnóstico:**
-  - `scripts/monitor_voltage.py`: Monitor en tiempo real de V_GPIO, V_Sensor y pH
-  - `scripts/fix_voltage_divider.py`: Diagnóstico interactivo del divisor de voltaje
-  - `scripts/diagnose_ph.py`: Troubleshooting general del sensor
+  - `scripts/monitor_temperature.py`: Monitor en tiempo real
+  - Documentación en `docs/`
   
 - **Documentación:**
-  - `docs/CALIBRATION.md`: Guía completa de calibración (334 líneas)
+  - `docs/CALIBRATION.md`: Guía completa de calibración
+  - `docs/TROUBLESHOOTING.md`: Solución de problemas
+  - `docs/SECURITY.md`: Guías de seguridad
   - `calibration_3point_result.txt`: Archivo de resultados de calibración
-  - README ampliado con sección de calibración detallada
-  
-- **Configuración Kconfig:**
-  - `CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR`: Factor del divisor de voltaje × 1000
-  - `CONFIG_BIOFLOC_TIMEZONE`: Configuración de zona horaria
-  - `CONFIG_BIOFLOC_NTP_SERVER`: Servidor NTP para sincronización de tiempo
-  - `CONFIG_BIOFLOC_LOCATION`: Identificador de ubicación del dispositivo
 
 ### 🔧 Changed
 - **Voltage divider factor:**
   - Valor inicial: 3.0 (incorrecto, basado en cálculo teórico)
-  - Primera corrección: 1.596 (basado en fórmula de datasheet)
   - **Valor final: 1.474** (calibrado con multímetro físico)
-  - Método: Medición directa con multímetro en GPIO (1.71V) y pH conocido (7.06)
   
 - **Calibración del sensor:**
-  - Fórmula inicial: pH = V_sensor × 2.8 (datasheet)
-  - Calibración 2 puntos (intento 1): slope=2.7798, offset=-0.1464 (error 0.61 pH)
-  - Calibración 3 puntos (intento 1): error 0.533 pH (timeout insuficiente)
-  - **Calibración 3 puntos (final): slope=2.559823, offset=0.469193**
+  - **Calibración 3 puntos: slope=2.559823, offset=0.469193**
     - R² = 0.9997 (ajuste casi perfecto)
     - Errores: [0.021, 0.049, 0.028] pH en los 3 puntos
     - Verificación en agua pH 7.06: lectura 7.09 (error 0.03 pH)
