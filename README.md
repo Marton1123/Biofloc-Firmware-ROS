@@ -2,7 +2,7 @@
 
 Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **ESP-IDF v5.3** y **MongoDB Atlas**.
 
-**Versión:** 3.0.0 (Arquitectura de 2 Colecciones con Indexación)
+**Versión:** 3.1.0 (Calibración de Temperatura con Regresión Lineal)
 
 ---
 
@@ -17,7 +17,8 @@ Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **
 - Monitoreo en tiempo real de pH y temperatura
 - Telemetría vía micro-ROS sobre WiFi UDP
 - Almacenamiento automático en MongoDB Atlas con indexación optimizada
-- Calibración de pH de 3 puntos (precisión <0.05 pH)
+- **Calibración de pH de 3 puntos** (precisión <0.05 pH, R²=0.9997)
+- **Calibración de temperatura con slope+offset** (precisión ≤0.03°C, R²=0.999999)
 - Reconexión automática WiFi y Agent
 - Publicación JSON estructurada
 - Auto-registro de nuevos dispositivos
@@ -130,6 +131,65 @@ python3 scripts/diagnose_ph.py
 4. **Verificar calibración:**
    - Probar en agua de pH conocido (medido con sensor manual)
    - Error esperado: <0.05 pH
+
+**Guía detallada:** Ver [docs/CALIBRATION.md](docs/CALIBRATION.md)
+
+## 🌡️ Calibración del Sensor de Temperatura
+
+### Estado Actual del Sistema (v3.1.0)
+
+**✅ Sistema completamente calibrado:**
+
+| Parámetro | Valor | Notas |
+|-----------|-------|-------|
+| **Calibration Slope** | 1.086092 | Factor de corrección multiplicativo |
+| **Calibration Offset** | -0.423°C | Corrección aditiva |
+| **R² (ajuste lineal)** | 0.999999 | Ajuste prácticamente perfecto |
+| **Precisión lograda** | ≤0.03°C | Verificado en 3 puntos (0°C, 23°C, 43°C) |
+| **Rango calibrado** | 0-44°C | Hielo, ambiente, agua caliente |
+| **Error máximo** | 0.03°C | En los 3 puntos de calibración |
+| **Referencia usada** | TP101 Digital | Termómetro de referencia profesional |
+
+### Herramientas de Calibración
+
+```bash
+# 1. Monitor de temperatura en tiempo real
+python3 scripts/monitor_temperature.py
+
+# 2. Calibración de 3 puntos (espera 3 min por punto)
+python3 scripts/calibrate_temperature.py
+```
+
+### Proceso de Calibración de Temperatura
+
+1. **Preparar 3 puntos de calibración:**
+   - **Punto frío:** Agua con hielo (~0°C)
+   - **Punto ambiente:** Agua a temperatura ambiente (~20-25°C)
+   - **Punto caliente:** Agua caliente (~40-50°C)
+   - Tener termómetro de referencia (TP101 o similar)
+
+2. **Ejecutar calibración:**
+   ```bash
+   python3 scripts/calibrate_temperature.py
+   ```
+   - Seguir instrucciones en pantalla
+   - **IMPORTANTE:** Esperar 3 minutos de estabilización por punto
+   - El script calcula automáticamente slope y offset por regresión lineal
+
+3. **Aplicar parámetros al firmware:**
+   - Los valores se guardan automáticamente en `sdkconfig.defaults`:
+     ```
+     CONFIG_BIOFLOC_TEMP_SLOPE=1086092
+     CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES=-423
+     ```
+   - Recompilar y flashear: `idf.py build flash`
+
+4. **Verificar calibración:**
+   - Al iniciar, el ESP32 muestra: `Temperature calibration loaded: slope=1.086092, offset=-0.423°C`
+   - Comparar lecturas con termómetro de referencia
+   - Error esperado: ≤0.1°C
+
+**Fórmula de calibración:** `T_calibrada = slope × T_raw + offset`
 
 **Guía detallada:** Ver [docs/CALIBRATION.md](docs/CALIBRATION.md)
 

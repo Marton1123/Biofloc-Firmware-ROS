@@ -86,6 +86,13 @@ static struct {
         float offset;
         bool enabled;
     } ph_cal;
+    
+    /* Temperature Calibration Parameters */
+    struct {
+        float slope;
+        float offset;
+        bool enabled;
+    } temp_cal;
 } s_ctx = {
     .adc_handle = NULL,
     .cali_handle = NULL,
@@ -93,6 +100,11 @@ static struct {
     .initialized = false,
     .ph_cal = {
         .slope = PH_CONVERSION_FACTOR,
+        .offset = 0.0f,
+        .enabled = false
+    },
+    .temp_cal = {
+        .slope = 1.0f,
         .offset = 0.0f,
         .enabled = false
     }
@@ -277,6 +289,15 @@ esp_err_t sensors_init(void)
     /* Initialize calibration */
     init_adc_calibration();
 
+    /* Load temperature calibration from Kconfig */
+#ifdef CONFIG_BIOFLOC_TEMP_SLOPE
+    s_ctx.temp_cal.slope = CONFIG_BIOFLOC_TEMP_SLOPE / 1000000.0f;
+    s_ctx.temp_cal.offset = CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES / 1000.0f;
+    s_ctx.temp_cal.enabled = true;
+    ESP_LOGI(TAG, "Temperature calibration loaded: slope=%.6f, offset=%.3f°C",
+             s_ctx.temp_cal.slope, s_ctx.temp_cal.offset);
+#endif
+
     s_ctx.initialized = true;
     ESP_LOGI(TAG, "Sensor subsystem initialized");
 
@@ -387,7 +408,15 @@ esp_err_t sensors_read_temperature(sensor_reading_t *reading)
 
     float v_adc = voltage_mv / 1000.0f;
     float v_sensor = v_adc * TEMP_DIVIDER_FACTOR;
-    float temp_value = v_sensor * TEMP_CONVERSION_MULT - TEMP_CONVERSION_OFFSET;
+    float temp_raw = v_sensor * TEMP_CONVERSION_MULT - TEMP_CONVERSION_OFFSET;
+    
+    /* Apply calibration if enabled, otherwise use raw value */
+    float temp_value;
+    if (s_ctx.temp_cal.enabled) {
+        temp_value = s_ctx.temp_cal.slope * temp_raw + s_ctx.temp_cal.offset;
+    } else {
+        temp_value = temp_raw;
+    }
 
     reading->raw_adc = raw_adc;
     reading->voltage_adc = v_adc;
@@ -395,8 +424,9 @@ esp_err_t sensors_read_temperature(sensor_reading_t *reading)
     reading->value = temp_value;
     reading->valid = (temp_value >= TEMP_MIN_VALUE && temp_value <= TEMP_MAX_VALUE);
 
-    ESP_LOGD(TAG, "Temp: raw=%d, Vadc=%.3fV, Vsensor=%.3fV, T=%.2fC, valid=%d",
-             raw_adc, v_adc, v_sensor, temp_value, reading->valid);
+    ESP_LOGD(TAG, "Temp: raw=%d, Vadc=%.3fV, Vsensor=%.3fV, T=%.2fC, valid=%d%s",
+             raw_adc, v_adc, v_sensor, temp_value, reading->valid,
+             s_ctx.temp_cal.enabled ? " [CAL]" : "");
 
     return ESP_OK;
 }

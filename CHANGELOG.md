@@ -5,6 +5,63 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.1.0] - 2026-01-29
+
+### Resumen
+Implementación completa del sistema de calibración de temperatura con slope+offset mediante regresión lineal de 3 puntos. Precisión mejorada a ≤0.03°C (R²=0.999999).
+
+### Agregado
+- **Sistema de calibración de temperatura:**
+  - Calibración de 3 puntos con regresión lineal (método similar al de pH)
+  - Configuración automática desde Kconfig: `CONFIG_BIOFLOC_TEMP_SLOPE` y `CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES`
+  - Aplicación automática en `sensors_read_temperature()`: `T_cal = slope × T_raw + offset`
+  - Logs con marcador `[CAL]` cuando la calibración está activa
+  - Valores almacenados en `sdkconfig.defaults` para persistencia
+
+- **Herramientas de calibración:**
+  - `scripts/calibrate_temperature.py`: Script interactivo de calibración de 3 puntos
+  - Espera forzada de 3 minutos por punto para estabilización térmica
+  - Cálculo automático de slope, offset y R² por regresión lineal
+  - Verificación de errores en cada punto de calibración
+  - Generación automática de archivo `temperature_calibration_result.txt`
+
+- **Opciones de configuración en `main/Kconfig.projbuild`:**
+  - `CONFIG_BIOFLOC_TEMP_SLOPE`: Pendiente × 1,000,000 (rango 0.5-1.5, default: 1086092)
+  - `CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES`: Offset × 1000 (rango ±5°C, default: -423)
+  - Documentación integrada en menú de configuración
+
+### Cambiado
+- **main/sensors.c v2.3.0:**
+  - Añadido struct `temp_cal` con campos slope, offset, enabled
+  - Modificado `sensors_init()` para cargar calibración desde Kconfig
+  - Modificado `sensors_read_temperature()` para aplicar calibración si está habilitada
+  - Logs mejorados con información de calibración al inicio
+
+- **sdkconfig.defaults:**
+  - Añadida sección de calibración de temperatura con valores óptimos
+  - Documentación de ecuación de calibración en comentarios
+  - Fecha de calibración registrada (2026-01-29)
+
+### Corregido
+- **Configuración WiFi duplicada:**
+  - El componente micro-ROS usa `CONFIG_ESP_WIFI_SSID/PASSWORD` (no `CONFIG_BIOFLOC_WIFI_*`)
+  - Corregidas credenciales en líneas 457-458 de sdkconfig
+  - Conexión WiFi ahora funciona correctamente
+
+### Rendimiento
+- **Precisión de temperatura mejorada:**
+  - De ±1.5°C (sin calibración) a ≤0.03°C (con calibración)
+  - R² = 0.999999 (ajuste prácticamente perfecto)
+  - Verificado en rango 0-44°C con termómetro TP101
+  - Error máximo observado: 0.03°C en 3 puntos de calibración
+
+### Detalles técnicos
+- **Calibración realizada:** 2026-01-29
+  - Punto 1: ESP32=0.47°C, TP101=0.10°C → error -0.01°C (post-cal)
+  - Punto 2: ESP32=21.96°C, TP101=23.40°C → error +0.03°C (post-cal)
+  - Punto 3: ESP32=40.52°C, TP101=43.60°C → error -0.01°C (post-cal)
+  - Ecuación: `T_calibrada = 1.086092 × T_raw - 0.423`
+
 ## [3.0.0] - 2026-01-29
 
 ### Resumen

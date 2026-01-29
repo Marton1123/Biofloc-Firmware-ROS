@@ -36,3 +36,10 @@ CONFIG_LWIP_SO_RCVBUF=y
 
 # ---- FreeRTOS ----
 CONFIG_FREERTOS_HZ=1000
+
+# ---- Temperature Sensor Calibration ----
+# Calibrado 2026-01-29 con TP101 (3 puntos, R²=0.999999)
+# Ecuación: T_calibrada = 1.086092 × T_raw - 0.423°C
+CONFIG_BIOFLOC_TEMP_SLOPE=1086092
+CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES=-423
+

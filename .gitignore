@@ -49,8 +49,8 @@ secrets/
 **/id_rsa*
 
 # Configuración con credenciales WiFi
-# sdkconfig contiene passwords WiFi - revisar antes de commitear
-# sdkconfig  # Descomentar si contiene credenciales sensibles
+# sdkconfig contiene passwords WiFi - NUNCA commitear con credenciales reales
+sdkconfig
 
 # Compiled Object files
 *.slo

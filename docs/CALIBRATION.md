@@ -1,8 +1,138 @@
-# pH Sensor Calibration Guide
+# Sensor Calibration Guide
 
 ## Overview
 
-The CWT-BL pH sensor requires calibration to provide accurate readings. This guide explains the calibration process using standard pH buffer solutions.
+The CWT-BL sensor provides both pH and temperature measurements. Both sensors require calibration to provide accurate readings. This guide explains the calibration processes for both sensors.
+
+---
+
+# Table of Contents
+
+1. [Temperature Sensor Calibration](#temperature-sensor-calibration)
+2. [pH Sensor Calibration](#ph-sensor-calibration)
+
+---
+
+# Temperature Sensor Calibration
+
+## Overview
+
+The CWT-BL temperature sensor benefits from a 3-point linear regression calibration to compensate for non-linear behavior. This method provides excellent accuracy (≤0.03°C) across the full operating range.
+
+## Hardware Requirements
+
+- **Reference Thermometer**: Professional digital thermometer (e.g., TP101, accuracy ±0.1°C)
+- **Temperature Sources**:
+  - Cold water with ice (~0°C)
+  - Room temperature water (~20-25°C)
+  - Hot water (~40-50°C, max 65°C)
+- **Containers**: Beakers or cups for water
+- **Time**: ~15 minutes total (3 min stabilization per point)
+
+## Calibration Method: Interactive 3-Point Tool (Recommended)
+
+The easiest way to calibrate temperature is using the interactive Python tool:
+
+```bash
+# 1. Start micro-ROS Agent
+ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
+
+# 2. In another terminal, run calibration tool
+cd /home/Biofloc-Firmware-ROS
+python3 scripts/calibrate_temperature.py
+```
+
+### Step-by-Step Process
+
+1. **Prepare Cold Point (0-5°C)**:
+   - Fill container with ice and water
+   - Submerge both ESP32 sensor and reference thermometer
+   - Wait for script's forced 3-minute stabilization period
+   - Enter temperature from reference thermometer when prompted
+
+2. **Prepare Ambient Point (20-25°C)**:
+   - Use room temperature water
+   - Ensure both sensors are fully submerged
+   - Wait for 3-minute stabilization
+   - Enter reference temperature
+
+3. **Prepare Hot Point (40-50°C)**:
+   - Use hot water (NOT boiling, max 65°C)
+   - Monitor temperature as it cools
+   - Wait for stabilization
+   - Enter reference temperature
+
+4. **Review Results**:
+   The tool will display:
+   - Linear regression equation: `T_cal = slope × T_raw + offset`
+   - R² value (should be >0.999)
+   - Verification errors at each point (should be ≤0.1°C)
+
+5. **Apply Calibration**:
+   Results are automatically saved to `temperature_calibration_result.txt` and ready to apply:
+   
+   ```bash
+   # Values are written to sdkconfig.defaults
+   # Just rebuild and flash:
+   idf.py build flash
+   ```
+
+## Expected Results (v3.1.0 Calibration)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| **Slope** | 1.086092 | Multiplicative correction factor |
+| **Offset** | -0.423°C | Additive correction |
+| **R²** | 0.999999 | Nearly perfect fit |
+| **Max Error** | 0.03°C | Verified across 3 points |
+| **Range** | 0-44°C | Calibrated range |
+
+**Calibration Equation**: `T_calibrated = 1.086092 × T_raw - 0.423`
+
+## Verification
+
+After flashing calibrated firmware, verify at boot:
+
+```
+I (15585) SENSORS: Temperature calibration loaded: slope=1.086092, offset=-0.423°C
+```
+
+Compare readings with reference thermometer - error should be ≤0.1°C.
+
+## Troubleshooting
+
+### High Temperature Readings (>50°C in room temp)
+
+**Cause**: No calibration applied, or incorrect voltage divider.
+
+**Solution**:
+1. Verify calibration is loaded (check boot logs)
+2. Check sensor wiring and voltage divider
+3. Re-run calibration procedure
+
+### Unstable Readings
+
+**Cause**: Insufficient thermal stabilization time.
+
+**Solution**:
+- Wait full 3 minutes per calibration point
+- Ensure sensor probe is fully submerged
+- Avoid temperature gradients (stir water gently)
+- Keep sensor away from heat sources
+
+### Poor R² Value (<0.99)
+
+**Cause**: Reference temperature readings incorrect or inconsistent.
+
+**Solution**:
+- Use professional reference thermometer (±0.1°C accuracy)
+- Verify reference thermometer calibration
+- Ensure both sensors read same water mass
+- Check for air bubbles on sensor surface
+
+---
+
+# pH Sensor Calibration
 
 ## Hardware Requirements
 

@@ -121,6 +121,26 @@ menu "Biofloc Configuration"
                 default y
                 help
                     Habilitar lectura del sensor de temperatura.
+
+            config BIOFLOC_TEMP_SLOPE
+                int "Temperature Calibration Slope x1000000"
+                default 1086092
+                range 500000 1500000
+                depends on BIOFLOC_TEMP_ENABLED
+                help
+                    Pendiente de calibración de temperatura × 1000000.
+                    Valor por defecto: 1.086092 (calibrado 2026-01-29).
+                    Usar scripts/calibrate_temperature.py para recalibrar.
+
+            config BIOFLOC_TEMP_OFFSET_MILLIDEGREES
+                int "Temperature Calibration Offset (millidegrees)"
+                default -423
+                range -5000 5000
+                depends on BIOFLOC_TEMP_ENABLED
+                help
+                    Offset de calibración en miligrados (°C × 1000).
+                    Valor por defecto: -0.423°C = -423 millidegrees (calibrado 2026-01-29).
+                    Usar scripts/calibrate_temperature.py para recalibrar.
         endmenu
     endmenu
 
