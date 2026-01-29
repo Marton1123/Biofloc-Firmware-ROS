@@ -2,25 +2,27 @@
 
 Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **ESP-IDF v5.3** y **MongoDB Atlas**.
 
-**Versión:** 2.3.0 (Bridge Fix + Documentation)
+**Versión:** 3.0.0 (Arquitectura de 2 Colecciones con Indexación)
 
 ---
 
-## 🚀 ¿Primera vez? Empieza aquí
+## Inicio Rápido
 
-👉 **[GUÍA PASO A PASO](GUIA_PASO_A_PASO.md)** — Instrucciones completas para ejecutar el proyecto
+**[GUÍA PASO A PASO](GUIA_PASO_A_PASO.md)** - Instrucciones completas de ejecución
 
 ---
 
-## ✨ Características
+## Características
 
-- 🌊 Monitoreo en tiempo real de pH y temperatura
-- 📡 Telemetría vía micro-ROS sobre WiFi UDP
-- 🗄️ Almacenamiento automático en MongoDB Atlas
-- 🎯 Calibración de pH de 3 puntos (precisión <0.05 pH)
-- 🔄 Reconexión automática WiFi y Agent
-- 📊 Publicación JSON estructurada
-- 🛠️ Herramientas de diagnóstico y calibración
+- Monitoreo en tiempo real de pH y temperatura
+- Telemetría vía micro-ROS sobre WiFi UDP
+- Almacenamiento automático en MongoDB Atlas con indexación optimizada
+- Calibración de pH de 3 puntos (precisión <0.05 pH)
+- Reconexión automática WiFi y Agent
+- Publicación JSON estructurada
+- Auto-registro de nuevos dispositivos
+- Arquitectura de 2 colecciones para escalabilidad
+- Herramientas de diagnóstico y calibración
 
 ## 📋 Requisitos
 
@@ -131,61 +133,99 @@ python3 scripts/diagnose_ph.py
 
 **Guía detallada:** Ver [docs/CALIBRATION.md](docs/CALIBRATION.md)
 
-## 🗄️ MongoDB Bridge (Almacenamiento de Datos)
+## MongoDB Bridge (Almacenamiento de Datos)
 
-### Configuración
+### Arquitectura v3.0
 
-1. **Crear archivo `.env` en el directorio `scripts/`:**
+Diseño de 2 colecciones para escalabilidad y consultas eficientes:
+
+**telemetria** - Lecturas de sensores (series temporales)
+- Indexada por (device_id, timestamp) para consultas rápidas por dispositivo
+- Indexada por (timestamp) para lecturas recientes de todos los dispositivos
+
+**devices** - Metadatos y estado de dispositivos
+- Clave primaria: device_id (dirección MAC)
+- Auto-registro de nuevos dispositivos
+- Historial de conexión y estadísticas
+- Parámetros de configuración y calibración
+
+### Configuración Inicial
+
+**1. Configurar archivo de entorno:**
 
 ```bash
 cd /home/Biofloc-Firmware-ROS/scripts
 cp .env.example .env
-nano .env  # Editar MONGODB_URI con tu conexión
+nano .env
 ```
 
-**Contenido del `.env`:**
+**Variables de entorno (.env):**
 ```bash
-MONGODB_URI=mongodb+srv://usuario:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_URI=mongodb+srv://user:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
 MONGODB_DATABASE=SistemasLab
 MONGODB_COLLECTION=telemetria
+MONGODB_COLLECTION_DEVICES=devices
 ROS_TOPIC=/biofloc/sensor_data
 LOG_DATA=true
 ```
 
-2. **Instalar dependencias:**
+**2. Instalar dependencias:**
 
 ```bash
 pip install pymongo python-dotenv
 ```
 
-### Uso (3 Terminales)
+**3. Ejecutar migración (solo primera vez):**
 
-**Terminal 1 — micro-ROS Agent:**
+```bash
+cd /home/Biofloc-Firmware-ROS/scripts
+python3 migrate_to_devices_collection.py
+```
+
+Esto:
+- Crea colección devices desde system_config existente
+- Crea índices optimizados en telemetria
+- Calcula estadísticas de conexión
+- Verifica éxito de la migración
+
+**4. Verificar migración:**
+
+```bash
+python3 verify_migration.py
+```
+
+**NOTA IMPORTANTE:** No es necesario flashear el ESP32. Los cambios son solo en el bridge Python (backend), el firmware continúa funcionando sin modificaciones.
+
+### Uso Diario (3 Terminales)
+
+**Terminal 1 - micro-ROS Agent:**
 ```bash
 source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
 ```
 
-**Terminal 2 — Ver datos (opcional):**
+**Terminal 2 - Ver datos (opcional):**
 ```bash
 source /opt/ros/jazzy/setup.bash
 ros2 topic echo /biofloc/sensor_data std_msgs/msg/String
 ```
 
-**Terminal 3 — Guardar en MongoDB:**
+**Terminal 3 - Guardar en MongoDB:**
 ```bash
 cd /home/Biofloc-Firmware-ROS/scripts
 source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash
 python3 sensor_db_bridge.py
 ```
 
-### Formato de Documento en MongoDB
+### Formatos de Documentos
 
+**Colección telemetria (lecturas de sensores):**
 ```json
 {
+  "_id": ObjectId("..."),
   "device_id": "biofloc_esp32_c8e0",
   "location": "tanque_01",
-  "timestamp": "2026-01-22T16:34:17-0300",
+  "timestamp": "2026-01-29T16:34:17-0300",
   "sensors": {
     "ph": { "value": 7.06, "voltage": 2.58, "unit": "pH", "valid": true },
     "temperature": { "value": 22.2, "voltage": 2.10, "unit": "C", "valid": true }
@@ -194,16 +234,51 @@ python3 sensor_db_bridge.py
 }
 ```
 
+**Colección devices (metadatos de dispositivos):**
+```json
+{
+  "_id": "biofloc_esp32_c8e0",
+  "alias": "ESP32-c8e0",
+  "location": "tanque_01",
+  "estado": "activo",
+  "auto_registrado": true,
+  "firmware_version": "2.3.0",
+  "intervalo_lectura_seg": 4,
+  "sensores_habilitados": ["ph", "temperatura"],
+  "calibracion": {
+    "ph_slope": 2.559823,
+    "ph_offset": 0.469193,
+    "voltage_divider": 1.474
+  },
+  "umbrales": {
+    "ph": { "min_value": 6.5, "max_value": 8.5 },
+    "temperatura": { "min_value": 20, "max_value": 30 }
+  },
+  "unidades": {
+    "temperatura": "°C",
+    "ph": "pH"
+  },
+  "conexion": {
+    "primera": "2026-01-21T14:00:00-0300",
+    "ultima": "2026-01-29T16:34:17-0300",
+    "total_lecturas": 17210
+  }
+}
+```
+
 ### Notas Importantes
 
-- **Timezone:** El ESP32 usa **CLT3** (GMT-3 fijo, Chile)
-- **Timestamp:** Generado por el ESP32 después de sincronizar con NTP
+- **Timezone:** ESP32 usa CLT3 (GMT-3 fijo, Chile)
+- **Timestamp:** Generado por ESP32 después de sincronizar con NTP
 - **Tasa de guardado:** ~1 mensaje cada 4 segundos (250 msg/hora)
 - **Success rate:** 100% (verificado con 17,000+ documentos)
+- **Auto-registro:** Nuevos dispositivos se crean automáticamente en colección devices
+- **Índices:** Consultas optimizadas con índices compuestos para tiempos de respuesta <5ms
+- **Sin cambios en firmware:** No requiere flashear el ESP32, cambios solo en backend Python
 
-## 🖥️ micro-ROS Agent
+## micro-ROS Agent
 
-En tu PC con ROS 2 Jazzy (compilado localmente en `~/microros_ws/`):
+En tu PC con ROS 2 Jazzy (compilado localmente en ~/microros_ws/):
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -211,11 +286,11 @@ source ~/microros_ws/install/local_setup.bash
 ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888 -v6
 ```
 
-## 📁 Estructura del Proyecto
+## Estructura del Proyecto
 
 ```
 Biofloc-Firmware-ROS/
-├── GUIA_PASO_A_PASO.md              # 🚀 Guía de ejecución paso a paso
+├── GUIA_PASO_A_PASO.md              # Guía de ejecución paso a paso
 ├── README.md                        # Este archivo
 ├── CMakeLists.txt                   # CMake raíz del proyecto ESP-IDF
 ├── sdkconfig                        # Configuración actual del proyecto
@@ -223,46 +298,48 @@ Biofloc-Firmware-ROS/
 ├── calibration_3point_result.txt    # Resultados de última calibración
 │
 ├── main/
-│   ├── main.c                       # Firmware principal v2.2.0
+│   ├── main.c                       # Firmware principal v2.2.0 (sin cambios)
 │   ├── sensors.c                    # Driver de sensores CWT-BL
 │   ├── sensors.h                    # API de sensores
 │   ├── CMakeLists.txt               # CMake del componente
 │   └── Kconfig.projbuild            # Opciones de menuconfig
 │
 ├── scripts/
-│   ├── sensor_db_bridge.py          # 🗄️ Bridge ROS 2 → MongoDB
-│   ├── calibrate_ph.py              # 🎯 Calibración de pH (3 puntos)
-│   ├── monitor_sensores.py          # 📊 Monitor en tiempo real
-│   ├── monitor_temperature.py       # 🌡️ Monitor de temperatura
-│   ├── check_mongodb.py             # ✅ Verificar conexión MongoDB
+│   ├── sensor_db_bridge.py          # Bridge ROS 2 -> MongoDB v3.0
+│   ├── migrate_to_devices_collection.py  # Script de migración MongoDB
+│   ├── verify_migration.py          # Verificación de migración
+│   ├── calibrate_ph.py              # Calibración de pH (3 puntos)
+│   ├── monitor_sensores.py          # Monitor en tiempo real
+│   ├── monitor_temperature.py       # Monitor de temperatura
+│   ├── check_mongodb.py             # Verificador de conexión MongoDB
 │   ├── .env.example                 # Plantilla de configuración
-│   └── .env                         # Credenciales (NO en git)
+│   └── .env                         # Credentials (NOT in git)
 │
 ├── docs/
-│   ├── CALIBRATION.md               # Guía de calibración de pH
-│   ├── TROUBLESHOOTING.md           # Solución de problemas
-│   └── SECURITY.md                  # Guías de seguridad
+│   ├── CALIBRATION.md               # pH calibration guide
+│   ├── TROUBLESHOOTING.md           # Problem solving
+│   └── SECURITY.md                  # Security guidelines
 │
 └── components/
-    └── micro_ros_espidf_component/  # Componente micro-ROS Jazzy
+    └── micro_ros_espidf_component/  # micro-ROS Jazzy component
 ```
 
-## ⚙️ Configuración Kconfig
+## Kconfig Configuration
 
-| Parámetro | Valor por defecto | Descripción |
-|-----------|-------------------|-------------|
-| `BIOFLOC_WIFI_SSID` | MyNetwork | SSID de la red WiFi |
-| `BIOFLOC_WIFI_PASSWORD` | MyPassword | Contraseña WiFi |
-| `BIOFLOC_WIFI_MAXIMUM_RETRY` | 5 | Reintentos de conexión |
-| `BIOFLOC_AGENT_IP` | 192.168.1.100 | IP del micro-ROS Agent |
-| `BIOFLOC_AGENT_PORT` | 8888 | Puerto UDP del Agent |
-| `BIOFLOC_ROS_NAMESPACE` | biofloc | Namespace de ROS 2 |
-| `BIOFLOC_PING_TIMEOUT_MS` | 1000 | Timeout del ping |
-| `BIOFLOC_PING_RETRIES` | 10 | Reintentos de ping |
-| `BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR` | 1474 | Factor divisor × 1000 (1.474) |
+| Parameter | Default Value | Description |
+|-----------|---------------|-------------|
+| `BIOFLOC_WIFI_SSID` | MyNetwork | WiFi network SSID |
+| `BIOFLOC_WIFI_PASSWORD` | MyPassword | WiFi password |
+| `BIOFLOC_WIFI_MAXIMUM_RETRY` | 5 | Connection retries |
+| `BIOFLOC_AGENT_IP` | 192.168.1.100 | micro-ROS Agent IP |
+| `BIOFLOC_AGENT_PORT` | 8888 | Agent UDP port |
+| `BIOFLOC_ROS_NAMESPACE` | biofloc | ROS 2 namespace |
+| `BIOFLOC_PING_TIMEOUT_MS` | 1000 | Ping timeout |
+| `BIOFLOC_PING_RETRIES` | 10 | Ping retries |
+| `BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR` | 1474 | Divider factor × 1000 (1.474) |
 | `BIOFLOC_TIMEZONE` | CLT3 | Timezone (CLT3 = Chile GMT-3) |
-| `BIOFLOC_NTP_SERVER` | pool.ntp.org | Servidor NTP para sincronización |
-| `BIOFLOC_LOCATION` | tanque_01 | Identificador de ubicación |
+| `BIOFLOC_NTP_SERVER` | pool.ntp.org | NTP server for sync |
+| `BIOFLOC_LOCATION` | tanque_01 | Location identifier |
 
 ## 🔄 Flujo de Inicialización
 

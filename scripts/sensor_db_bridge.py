@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 """
-Biofloc Sensor DB Bridge — Puente ROS 2 a MongoDB.
+Biofloc Sensor DB Bridge - ROS 2 to MongoDB Bridge
 
-Suscribe a /biofloc/sensor_data (JSON) y almacena en MongoDB Atlas.
+Subscribes to /biofloc/sensor_data (JSON) and stores in MongoDB Atlas.
+Uses two-collection architecture for scalability and efficient indexing.
 
-Uso:
-    # 1. Configurar credenciales
+Architecture:
+    - telemetria: time-series sensor readings with indexed queries
+    - devices: device metadata, state, and connection history
+
+Usage:
+    # 1. Configure credentials
     cp scripts/.env.example scripts/.env
     nano scripts/.env
     
-    # 2. Ejecutar (con ROS 2 y Agent corriendo)
+    # 2. Run migration (first time only)
+    python3 scripts/migrate_to_devices_collection.py
+    
+    # 3. Execute bridge (with ROS 2 and Agent running)
     cd /home/Biofloc-Firmware-ROS/scripts
     source /opt/ros/jazzy/setup.bash
     source ~/microros_ws/install/local_setup.bash
     python3 sensor_db_bridge.py
 
-Dependencias:
+Dependencies:
     pip install pymongo python-dotenv
 
-Autor: @Marton1123
-Versión: 2.3.0 (Corregido para JSON String)
+Author: @Marton1123
+Version: 3.0.0 (Two-collection architecture with auto-registration)
 """
 
 import json
@@ -71,6 +79,10 @@ except ImportError:
 class SensorDBBridge(Node):
     """
     ROS 2 node that receives sensor data and stores it in MongoDB.
+    
+    Two-collection architecture:
+        - telemetria: sensor readings (time-series)
+        - devices: device metadata, state, connection history
     """
     
     def __init__(self):
@@ -80,13 +92,15 @@ class SensorDBBridge(Node):
         self.mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
         self.db_name = os.getenv('MONGODB_DATABASE', 'SistemasLab')
         self.collection_name = os.getenv('MONGODB_COLLECTION', 'telemetria')
+        self.devices_collection_name = os.getenv('MONGODB_COLLECTION_DEVICES', 'devices')
         self.topic_name = os.getenv('ROS_TOPIC', '/biofloc/sensor_data')
         self.log_data = os.getenv('LOG_DATA', 'true').lower() == 'true'
         
         # MongoDB connection
         self.mongo_client: Optional[MongoClient] = None
         self.db = None
-        self.collection = None
+        self.telemetria_collection = None
+        self.devices_collection = None
         self.mongodb_connected = False
         
         # Statistics
@@ -112,9 +126,11 @@ class SensorDBBridge(Node):
         self.status_timer = self.create_timer(60.0, self._log_status)
         
         self.get_logger().info("=" * 60)
-        self.get_logger().info("Sensor DB Bridge Started")
+        self.get_logger().info("Sensor DB Bridge v3.0 Started")
         self.get_logger().info(f"  Topic: {self.topic_name}")
-        self.get_logger().info(f"  Database: {self.db_name}.{self.collection_name}")
+        self.get_logger().info(f"  Database: {self.db_name}")
+        self.get_logger().info(f"    - telemetria: {self.collection_name}")
+        self.get_logger().info(f"    - devices: {self.devices_collection_name}")
         self.get_logger().info(f"  MongoDB Connected: {self.mongodb_connected}")
         self.get_logger().info("=" * 60)
     
@@ -130,18 +146,19 @@ class SensorDBBridge(Node):
             self.mongo_client.admin.command('ping')
             
             self.db = self.mongo_client[self.db_name]
-            self.collection = self.db[self.collection_name]
+            self.telemetria_collection = self.db[self.collection_name]
+            self.devices_collection = self.db[self.devices_collection_name]
             
             self.mongodb_connected = True
-            self.get_logger().info(f"✓ Connected to MongoDB")
+            self.get_logger().info(f"Connected to MongoDB: {self.db_name}")
             return True
             
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            self.get_logger().error(f"✗ Failed to connect to MongoDB: {e}")
+            self.get_logger().error(f"Failed to connect to MongoDB: {e}")
             self.mongodb_connected = False
             return False
         except Exception as e:
-            self.get_logger().error(f"✗ MongoDB error: {e}")
+            self.get_logger().error(f"MongoDB error: {e}")
             self.mongodb_connected = False
             return False
     
@@ -152,6 +169,11 @@ class SensorDBBridge(Node):
         try:
             # Parse JSON from String message
             data = json.loads(msg.data)
+            
+            # Extract device information
+            device_id = data.get('device_id', 'biofloc_esp32')
+            location = data.get('location', 'lab')
+            timestamp = data.get('timestamp', datetime.now().isoformat())
             
             # Extract sensor values
             sensors = data.get('sensors', {})
@@ -165,11 +187,11 @@ class SensorDBBridge(Node):
             temp_valid = -20 <= temperature <= 80
             ph_valid = 0 <= ph <= 14
             
-            # Create document (preserve original JSON structure from ESP32)
-            doc = {
-                'device_id': data.get('device_id', 'biofloc_esp32'),
-                'location': data.get('location', 'lab'),
-                'timestamp': data.get('timestamp', datetime.now().isoformat()),
+            # Create telemetria document (time-series data)
+            telemetria_doc = {
+                'device_id': device_id,
+                'location': location,
+                'timestamp': timestamp,
                 'sensors': {
                     'temperature': {
                         'value': round(temperature, 2),
@@ -189,18 +211,27 @@ class SensorDBBridge(Node):
             
             # Log sensor data
             if self.log_data:
-                self._log_sensor_data(doc)
+                self._log_sensor_data(telemetria_doc)
             
-            # Save to MongoDB
-            if self.mongodb_connected and self.collection is not None:
+            # Save to MongoDB (two-collection architecture)
+            if self.mongodb_connected and self.telemetria_collection is not None:
                 try:
-                    result = self.collection.insert_one(doc)
+                    # 1. Insert reading into telemetria
+                    result = self.telemetria_collection.insert_one(telemetria_doc)
+                    
                     if result.inserted_id:
                         self.messages_saved += 1
-                        self.get_logger().debug(f"Saved document: {result.inserted_id}")
+                        
+                        # 2. Update/create device in devices collection
+                        self._update_device_metadata(device_id, location, timestamp)
+                        
+                        self.get_logger().debug(
+                            f"Saved: {device_id} | pH: {ph:.2f} | Temp: {temperature:.2f}°C"
+                        )
                     else:
                         self.messages_failed += 1
                         self.get_logger().warning("Failed to save document")
+                        
                 except Exception as e:
                     self.get_logger().error(f"MongoDB insert error: {e}")
                     self.messages_failed += 1
@@ -222,6 +253,52 @@ class SensorDBBridge(Node):
             self.get_logger().error(f"Error processing message: {e}")
             self.messages_failed += 1
     
+    def _update_device_metadata(self, device_id: str, location: str, timestamp: str):
+        """Update device metadata in devices collection."""
+        try:
+            # Check if device exists
+            device = self.devices_collection.find_one({'_id': device_id})
+            
+            if device:
+                # Device exists - just update
+                self.devices_collection.update_one(
+                    {'_id': device_id},
+                    {
+                        '$set': {
+                            'conexion.ultima': timestamp,
+                            'estado': 'activo',
+                            'location': location
+                        },
+                        '$inc': {
+                            'conexion.total_lecturas': 1
+                        }
+                    }
+                )
+            else:
+                # Device doesn't exist - create with initial values
+                self.devices_collection.insert_one({
+                    '_id': device_id,
+                    'alias': f'ESP32-{device_id[-4:]}',
+                    'location': location,
+                    'estado': 'activo',
+                    'auto_registrado': True,
+                    'firmware_version': 'unknown',
+                    'intervalo_lectura_seg': 4,
+                    'sensores_habilitados': ['ph', 'temperatura'],
+                    'umbrales': {},
+                    'unidades': {
+                        'temperatura': '°C',
+                        'ph': 'pH'
+                    },
+                    'conexion': {
+                        'primera': timestamp,
+                        'ultima': timestamp,
+                        'total_lecturas': 1
+                    }
+                })
+        except Exception as e:
+            self.get_logger().error(f"Error updating device metadata: {e}")
+    
     def _log_sensor_data(self, data: dict) -> None:
         """Display sensor data in the log."""
         device = data.get('device_id', 'unknown')
@@ -237,13 +314,13 @@ class SensorDBBridge(Node):
         temp_val = temp_data.get('value', 'N/A')
         temp_valid = temp_data.get('valid', False)
         
-        status_ph = "✓" if ph_valid else "✗"
-        status_temp = "✓" if temp_valid else "✗"
+        status_ph = "OK" if ph_valid else "ERR"
+        status_temp = "OK" if temp_valid else "ERR"
         
         self.get_logger().info(
             f"[{device}@{location}] "
-            f"pH: {ph_val} {status_ph} | "
-            f"Temp: {temp_val}°C {status_temp} | "
+            f"pH: {ph_val} [{status_ph}] | "
+            f"Temp: {temp_val}°C [{status_temp}] | "
             f"{timestamp}"
         )
     
