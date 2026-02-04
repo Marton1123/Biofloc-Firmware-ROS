@@ -13,6 +13,8 @@ src/uros/
 
 # micro-ROS component (cloned separately)
 components/micro_ros_espidf_component/
+**/micro_ros_espidf_component/
+**/micro_ros_espidf_component
 
 # Python
 __pycache__/

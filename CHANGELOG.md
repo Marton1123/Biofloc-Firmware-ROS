@@ -5,6 +5,59 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.2.0] - 2026-02-04
+
+### Resumen
+Agregado proyecto de ejemplo `test_led_project` para demostrar control de GPIO mediante micro-ROS con teclado. Proyecto educativo completamente documentado y funcional.
+
+### Agregado
+- **test_led_project/**: Proyecto de ejemplo completo
+  - Control de LED via micro-ROS desde teclado de la computadora
+  - Firmware ESP32 con suscripción a tópico `/led_control`
+  - Script Python `keyboard_led_control.py` para control interactivo
+  - Comandos soportados: ON, OFF, TOGGLE
+  - GPIO configurable (por defecto GPIO 2)
+
+- **Documentación completa del test_led_project:**
+  - `README.md`: Guía completa de instalación y uso
+  - `QUICKSTART.md`: Guía rápida de 5 minutos
+  - `DESARROLLO.md`: Historial completo del desarrollo (164 minutos)
+  - `SOLUCION_PROBLEMA_CONEXION.md`: Solución al bug crítico de conexión
+  - `ARQUITECTURA_Y_FUNCIONAMIENTO.md`: Explicación técnica de ROS 2, micro-ROS, DDS vs XRCE-DDS (800+ líneas)
+
+- **Archivos de configuración:**
+  - `CMakeLists.txt`: Configuración del proyecto y main
+  - `sdkconfig.defaults.example`: Plantilla de configuración
+  - `check_network.sh`: Script de diagnóstico de red
+  - `main_simple.c`: Firmware de prueba simple sin ROS
+
+### Corregido
+- **Bug crítico de conexión micro-ROS:**
+  - **Problema:** ESP32 se conectaba a WiFi pero no al agente micro-ROS
+  - **Causa:** Uso de `rmw_uros_ping_agent()` en lugar de `rmw_uros_ping_agent_options()`
+  - **Solución:** Usar `rmw_uros_ping_agent_options(timeout, attempts, rmw_options)`
+  - **Impacto:** Sin esto, el ESP32 nunca detecta al agente cuando se usa configuración UDP personalizada
+  - **Documentación:** Solución completamente documentada en `SOLUCION_PROBLEMA_CONEXION.md`
+
+### Seguridad
+- **Sanitización de credenciales:**
+  - Archivo `sdkconfig.defaults.example` con placeholders
+  - `sdkconfig.defaults` actualizado con credenciales genéricas
+  - `.gitignore` actualizado para prevenir commit de archivos sensibles
+
+### Detalles técnicos
+- **Implementación:**
+  - Firmware: 838,896 bytes (20% de partición libre)
+  - Protocolo: XRCE-DDS sobre UDP puerto 8888
+  - Latencia: ~50ms desde tecla hasta LED
+  - QoS: Best Effort con History 10
+
+- **Aprendizajes documentados:**
+  - Comparación DDS vs XRCE-DDS (92% menos overhead)
+  - Flujo completo de mensaje (17 pasos)
+  - Arquitectura de callbacks y executors
+  - Debugging con tcpdump y ros2 tools
+
 ## [3.1.0] - 2026-01-29
 
 ### Resumen

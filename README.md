@@ -24,6 +24,7 @@ Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **
 - Auto-registro de nuevos dispositivos
 - Arquitectura de 2 colecciones para escalabilidad
 - Herramientas de diagnóstico y calibración
+- **[test_led_project](test_led_project/)** - Proyecto de ejemplo para control de LED por teclado via micro-ROS
 
 ## 📋 Requisitos
 
