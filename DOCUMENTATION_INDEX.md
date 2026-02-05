@@ -29,6 +29,7 @@
 | **Instalación inicial** | [QUICKSTART.md](QUICKSTART.md) | Instalación |
 | **Sistema no responde** | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Procedimiento de Recuperación |
 | **Calibración de pH** | [docs/CALIBRATION.md](docs/CALIBRATION.md) | Calibración 3 Puntos |
+| **Analizar ciclos de pH** | [docs/PH_CYCLE_ANALYSIS.md](docs/PH_CYCLE_ANALYSIS.md) | Completo |
 | **Parámetros actuales** | [calibration_3point_result.txt](calibration_3point_result.txt) | Completo |
 | **Referencia de API** | [main/sensors.h](main/sensors.h) | Documentación de Funciones |
 | **Estado del proyecto** | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Métricas |
@@ -54,7 +55,15 @@
 | 3 | [TECHNICAL_SUMMARY.md](TECHNICAL_SUMMARY.md) | Parámetros actuales | 10 min |
 | 4 | [calibration_3point_result.txt](calibration_3point_result.txt) | Datos de calibración activa | 5 min |
 
-### 💻 Desarrolladores de Firmware
+### � Analistas de Datos / Biólogos
+| Prioridad | Documento | Propósito | Tiempo |
+|-----------|-----------|-----------|--------|
+| 1 | [docs/PH_CYCLE_ANALYSIS.md](docs/PH_CYCLE_ANALYSIS.md) | Análisis de ciclos circadianos de pH | 45 min |
+| 2 | [scripts/check_ph_cycles.py](scripts/check_ph_cycles.py) | Herramienta de análisis automático | 15 min |
+| 3 | [scripts/monitor_sensores.py](scripts/monitor_sensores.py) | Monitoreo en tiempo real | 10 min |
+| 4 | [config/db_bridge_config.yaml](config/db_bridge_config.yaml) | Configuración de BD | 5 min |
+
+### �💻 Desarrolladores de Firmware
 | Prioridad | Documento | Propósito | Tiempo |
 |-----------|-----------|-----------|--------|
 | 1 | [README.md](README.md) | Visión general de arquitectura | 20 min |
@@ -95,6 +104,11 @@
 - [QUICKSTART.md § Calibración](QUICKSTART.md) — Procedimiento rápido
 - [calibration_3point_result.txt](calibration_3point_result.txt) — Valores actuales
 - [main/sensors.h § API de Calibración](main/sensors.h) — Interfaz de código
+
+### Análisis de Datos y Monitoreo
+- [docs/PH_CYCLE_ANALYSIS.md](docs/PH_CYCLE_ANALYSIS.md) — Análisis de ciclos circadianos de pH
+- [scripts/check_ph_cycles.py](scripts/check_ph_cycles.py) — Herramienta de análisis automático
+- [scripts/monitor_sensores.py](scripts/monitor_sensores.py) — Monitoreo en tiempo real
 
 ### Instalación y Configuración
 - [QUICKSTART.md § Instalación](QUICKSTART.md) — Paso a paso
@@ -208,5 +222,5 @@ Esta documentación sigue:
 
 ---
 
-**Mantenido por:** Biofloc Engineering Team  
-**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/biofloc/Biofloc-Firmware-ROS)
+**Mantenido por:** [@Marton1123](https://github.com/Marton1123)  
+**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)

@@ -7,7 +7,7 @@
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  *
- * @author  Biofloc Engineering Team
+ * @author  @Marton1123 (https://github.com/Marton1123)
  * @date    2026
  */
 

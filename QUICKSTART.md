@@ -85,7 +85,7 @@ sudo apt install -y ros-jazzy-micro-ros-agent
 
 ```bash
 cd ~
-git clone --recursive https://github.com/tu-usuario/Biofloc-Firmware-ROS.git
+git clone --recursive https://github.com/Marton1123/Biofloc-Firmware-ROS.git
 cd Biofloc-Firmware-ROS
 ```
 

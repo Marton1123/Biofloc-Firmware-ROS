@@ -321,7 +321,7 @@ ESP32-D0WD v1.0
 
 ## 👥 Equipo
 
-**Desarrollado por:** Lab ROS 2 - Biofloc Engineering Team  
+**Desarrollado por:** [@Marton1123](https://github.com/Marton1123)  
 **Fecha:** Febrero 4, 2026  
 **Entorno:** Ubuntu con ROS 2 Jazzy  
 **ESP32:** Hardware de prueba dedicado

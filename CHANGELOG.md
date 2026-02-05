@@ -5,6 +5,70 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.2.1] - 2026-02-05
+
+### Resumen
+Nueva herramienta de análisis de ciclos de pH para detectar patrones fotosintéticos en cultivos de microalgas. Permite diagnosticar si las oscilaciones de pH son fenómenos biológicos normales o problemas de sensores.
+
+### Agregado
+- **scripts/check_ph_cycles.py**: Herramienta de análisis de ciclos circadianos de pH
+  - Análisis de pH por hora del día (últimas 96 horas configurables)
+  - Detección automática de patrón fotosintético
+  - Comparación madrugada temprana (23:00-02:00) vs mediodía solar (10:00-13:00)
+  - Cálculo de amplitud total del ciclo (pH máximo - pH mínimo)
+  - Detección de outliers (pH < 3 o > 12)
+  - Configuración de período de análisis (pre-mantenimiento vs tiempo real)
+  - Documentación completa del fenómeno biológico esperado
+
+### Características del análisis
+- **Período configurable**: Análisis de 72-96 horas
+- **Timezone-aware**: Maneja correctamente zonas horarias (Chile GMT-3)
+- **Estructura anidada**: Compatible con formato MongoDB `sensors.ph.value`
+- **Detección inteligente**: Identifica patrones de fotosíntesis vs anomalías
+- **Interpretación automática**: Explica los resultados en contexto biológico
+
+### Interpretación de resultados
+```
+Patrón Fotosintético Detectado:
+  - pH máximo: 10:00-13:00 (pico solar)
+  - Amplitud total del ciclo: >0.12 pH
+  - Diferencia madrugada→mediodía: >0.08 pH
+  - Indica: Cultivo con actividad fotosintética
+  
+Niveles de actividad:
+  - Amplitud >0.3 pH: Cultivo muy activo, alta biomasa
+  - Amplitud 0.12-0.3 pH: Cultivo activo, densidad moderada
+  - Amplitud <0.12 pH: Baja biomasa o sistema muy tamponado
+
+Patrón Atípico:
+  - Amplitud <0.08 pH: Patrón muy débil o ausente
+  - pH máximo fuera de 10:00-14:00: Posible iluminación artificial
+  - Patrón inverso: Interferencia de equipos/mantenimiento
+```
+
+### Casos de uso documentados
+1. **Diagnóstico de sensor**: Distinguir fallo de sensor vs fenómeno biológico
+2. **Salud del cultivo**: Evaluar actividad fotosintética
+3. **Optimización**: Correlacionar pH con densidad de microalgas
+4. **Troubleshooting**: Identificar períodos de mantenimiento que afectan lecturas
+
+### Resultados del análisis inicial
+- **Período normal (29 ene - 1 feb)**: Patrón fotosintético detectado
+  - pH máximo: 7.10 a las 11:00
+  - pH mínimo: 6.94 a las 17:00
+  - Amplitud del ciclo: 0.153 pH
+  - Diferencia madrugada→mediodía: +0.073 pH
+  - Amplitud: ~0.4 pH (normal para cultivos densos)
+  - Ritmo circadiano claro y consistente
+- **Período mantenimiento (2-5 feb)**: Sin patrón significativo
+  - Confirmó que las anomalías eran por manipulación de sensores
+
+### Dependencias
+- pymongo: Conexión a MongoDB Atlas
+- python-dateutil: Parsing de timestamps ISO
+- pytz: Manejo de zonas horarias
+- python-dotenv: Variables de entorno
+
 ## [3.2.0] - 2026-02-04
 
 ### Resumen

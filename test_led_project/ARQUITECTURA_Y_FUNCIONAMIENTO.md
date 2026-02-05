@@ -1052,6 +1052,6 @@ Este sistema demuestra:
 
 ---
 
-**Documentado por:** Lab ROS 2 - Biofloc Engineering Team  
+**Documentado por:** [@Marton1123](https://github.com/Marton1123)  
 **Fecha:** Febrero 4, 2026  
 **Versión:** 1.0

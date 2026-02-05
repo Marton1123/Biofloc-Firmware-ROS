@@ -244,7 +244,7 @@ python3 scripts/diagnose_ph.py
 
 **Proyecto:** Biofloc Firmware ROS  
 **Versión:** 2.2.0  
-**Repositorio:** [GitHub - Biofloc-Firmware-ROS]  
+**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)  
 **Documentación:** README.md, docs/CALIBRATION.md  
 **Licencia:** MIT
 

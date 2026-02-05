@@ -18,7 +18,7 @@ Principios aplicados:
     - Clean Code: Nombres descriptivos, funciones pequeñas
     - Type Hints: Tipado estático para mejor documentación
 
-Autor: Biofloc Engineering Team
+Autor: @Marton1123 (https://github.com/Marton1123)
 Versión: 2.0.0
 """
 

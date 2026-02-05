@@ -239,7 +239,7 @@
 **Proyecto:** Biofloc Firmware ROS  
 **Versión:** 2.2.0  
 **Licencia:** MIT  
-**Mantenedor:** Biofloc Engineering Team  
+**Mantenedor:** [@Marton1123](https://github.com/Marton1123)  
 
 **Documentos relacionados:**
 - [README.md](README.md) - Documentación principal

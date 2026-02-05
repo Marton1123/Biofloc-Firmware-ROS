@@ -149,6 +149,6 @@ rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator);
 
 ---
 
-**Documentado por**: Lab ROS 2 - Biofloc Engineering Team  
+**Documentado por**: [@Marton1123](https://github.com/Marton1123)  
 **Fecha**: Febrero 4, 2026  
 **Severidad**: Alta (sistema completamente no funcional sin esta corrección)

@@ -411,4 +411,4 @@ esp_err_t load_ph_calibration(float *slope, float *offset) {
 
 **Document Version**: 1.0  
 **Last Updated**: 2026-01-21  
-**Author**: Biofloc Engineering Team
+**Author**: [@Marton1123](https://github.com/Marton1123)
