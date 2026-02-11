@@ -15,20 +15,20 @@ Sistema IoT con **seguridad mejorada** donde los ESP32 **NO tienen acceso a Inte
 ```
 Internet
    |
-   | (Ethernet - enp88s0)
+   | (Ethernet - eth0)
    |
-[GATEWAY - NUC Ubuntu 24.04]
-   | - WiFi Hotspot (wlo1) - 10.42.0.1/24
+[GATEWAY - Raspberry Pi 3 + Ubuntu Server 24.04]
+   | - WiFi Hotspot (wlan0) - 10.42.0.1/24
    | - Firewall iptables (FORWARD DROP)
    | - micro-ROS Agent (UDP 8888)
    | - Scripts Python (Bridge, Monitor)
    | - biofloc_manager.py (Gestor Unificado)
    |
    | (WiFi - sin internet)
-   | SSID: <tu-ssid-gateway>
+   | SSID: Biofloc-Gateway
    | Red: 10.42.0.0/24
    |
-[ESP32 - 10.42.0.123]
+[ESP32 - 10.42.0.x]
    | - SIN acceso a internet (bloqueado por firewall)
    | - Solo UDP a 10.42.0.1:8888
    | - Timestamps basados en contador (sin NTP)
@@ -40,6 +40,7 @@ Internet
 ```
 
 **Ver:**  
+- [RASPBERRY_PI_MIGRATION.md](docs/guides/RASPBERRY_PI_MIGRATION.md) - Migración de NUC a Raspberry Pi 3
 - [MIGRATION_GUIDE_SECURE_GATEWAY.md](MIGRATION_GUIDE_SECURE_GATEWAY.md) - Guía genérica de migración  
 - [biofloc_manager.py](biofloc_manager.py) - Gestor unificado del sistema (CLI español, 12 opciones)
 
@@ -95,8 +96,13 @@ Internet
 ## 📋 Requisitos
 
 ### Hardware
-- **ESP32** (240MHz, Dual Core, WiFi 2.4GHz) - MAC: 24:0a:c4:60:c8:e0
-- **Gateway** Intel NUC o PC Linux (Ubuntu 24.04+, WiFi + Ethernet)
+- **ESP32** (240MHz, Dual Core, WiFi 2.4GHz) - MAC: XX:XX:XX:XX:XX:XX
+- **Gateway Raspberry Pi 3 Model B/B+**:
+  - CPU: ARM Cortex-A53 quad-core 1.2GHz
+  - RAM: 1GB
+  - WiFi: 2.4GHz 802.11n (built-in)
+  - Storage: microSD 16GB+ (clase 10)
+  - OS: Ubuntu Server 24.04 LTS ARM64
 - **Sensor** CWT-BL pH/Temperature Transmitter (0-5V output, 24V powered)
 - **Voltage Divider** (AMBOS sensores):
   - R1 = 10kΩ (pull-up, conectado a Vin del sensor)
@@ -106,6 +112,7 @@ Internet
   - **Factor = 1.5** (30k/20k)
 - **Soluciones buffer** pH 4.01, 6.86, 9.18 (para calibración de 3 puntos)
 - **Termómetro de referencia** (para calibración de temperatura)
+- **NUC o PC Linux** (opcional, solo para desarrollo/compilación de firmware)
 
 ### Software
 - **ESP-IDF** v5.3.4+ instalado y configurado
@@ -148,40 +155,48 @@ python3 biofloc_manager.py
 > Reemplaza `<tu-ssid-gateway>` y `<tu-password-seguro>` con tus propias credenciales.  
 > Consulta el archivo `.env` para la configuración real (no está en Git por seguridad).
 
-### 1. Configurar Gateway WiFi Hotspot
+### 1. Configurar Gateway WiFi Hotspot en Raspberry Pi
 
 ```bash
-# Crear hotspot en interfaz WiFi del gateway
-nmcli device wifi hotspot \
-  ifname wlo1 \
-  ssid "<tu-ssid-gateway>" \
-  password "<tu-password-seguro>"
+# En la Raspberry Pi 3:
+# Crear hotspot en interfaz wlan0 (2.4GHz)
+sudo nmcli connection add \
+  type wifi \
+  ifname wlan0 \
+  con-name Biofloc-Gateway \
+  autoconnect yes \
+  wifi.mode ap \
+  wifi.ssid "Biofloc-Gateway" \
+  wifi.band bg \
+  wifi.channel 1 \
+  ipv4.method shared \
+  ipv4.address 10.42.0.1/24 \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "<tu-password-seguro>"
 
-# Configurar autoconexión
-nmcli connection modify Hotspot connection.autoconnect yes
+# Activar hotspot
+sudo nmcli connection up Biofloc-Gateway
 
 # Verificar red creada (debe mostrar 10.42.0.1/24)
-ip addr show wlo1
+ip addr show wlan0
 ```
 
-**Ver:** [MIGRATION_GUIDE_SECURE_GATEWAY.md](MIGRATION_GUIDE_SECURE_GATEWAY.md#11-crear-hotspot-wifi-networkmanager) para más detalles.
+**⚠️ Nota de Seguridad:** Las credenciales mostradas aquí son de ejemplo. Cambialas por tus propias credenciales seguras. Consulta `.env` para la configuración real (no está en Git).
+
+**Ver:** [RASPBERRY_PI_MIGRATION.md](docs/guides/RASPBERRY_PI_MIGRATION.md#3-configurar-hotspot-wifi) para más detalles.
 
 ### 2. Configurar Firewall iptables
 
 ```bash
-# Copiar script de firewall a home
-cp MIGRATION_GUIDE_SECURE_GATEWAY.md ~/setup_iot_firewall.sh
-# (Extraer sección del script del .md)
-
-# Hacer ejecutable y correr
-chmod +x ~/setup_iot_firewall.sh
-sudo ~/setup_iot_firewall.sh
+# Bloquear acceso de ESP32 a internet (solo permite Gateway)
+sudo iptables -A FORWARD -s 10.42.0.0/24 -d 10.42.0.1 -j ACCEPT
+sudo iptables -A FORWARD -s 10.42.0.0/24 -j DROP
 
 # Hacer persistente
 sudo apt install iptables-persistent
 sudo netfilter-persistent save
 
-# Verificar (debe mostrar FORWARD policy DROP)
+# Verificar (debe mostrar FORWARD policy con DROP)
 sudo iptables -L FORWARD -v -n
 ```
 
@@ -259,7 +274,7 @@ idf.py -p /dev/ttyUSB0 monitor
 **Salida esperada:**
 ```
 I (3421) WIFI: WiFi connected to <tu-ssid-gateway>
-I (3425) WIFI: Got IP: 10.42.0.123
+I (3425) WIFI: Got IP: 10.42.0.x
 I (3430) MAIN: Connecting to micro-ROS agent at 10.42.0.1:8888
 ```
 
@@ -290,8 +305,8 @@ python3 biofloc_manager.py
 ```
 
 **Verifica:**
-- 📶 DHCP lease (MAC 24:0a:c4:60:c8:e0)
-- 🔗 ARP table (IP 10.42.0.123)
+- 📶 DHCP lease (MAC XX:XX:XX:XX:XX:XX)
+- 🔗 ARP table (IP 10.42.0.x)
 - 🎯 Ping al ESP32
 - 📡 Comunicación ROS (mensajes y tasa)
 
@@ -772,8 +787,6 @@ idf.py build
 - R² calibración: 0.9997 (ajuste casi perfecto)
 - Error máximo en buffers: 0.049 pH
 
-## 👤 Autor
+## 👤 Información del Proyecto
 
-**Marton1123**
-- GitHub: [@Marton1123](https://github.com/Marton1123)
-- Repositorio: [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)
+- Repositorio: Biofloc-Firmware-ROS

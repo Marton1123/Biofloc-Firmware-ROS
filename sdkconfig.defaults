@@ -13,12 +13,18 @@ CONFIG_MICRO_ROS_APP_TASK_PRIO=5
 CONFIG_MICRO_ROS_AGENT_IP="10.42.0.1"
 CONFIG_MICRO_ROS_AGENT_PORT=8888
 
-# ---- WiFi - Gateway Seguro (lab-ros2-nuc) ----
+# ---- WiFi - Gateway Seguro (Raspberry Pi 3) ----
 # IMPORTANTE: micro_ros component usa CONFIG_ESP_WIFI_*, NO CONFIG_BIOFLOC_WIFI_*
-CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
-CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+# ⚠️ SEGURIDAD: Reemplaza con tus propias credenciales antes de compilar
+CONFIG_ESP_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_ESP_WIFI_PASSWORD="<tu-password-seguro>"
 CONFIG_ESP_MAXIMUM_RETRY=15
 CONFIG_ESP_WIFI_SCAN_RSSI_THRESHOLD=-127
+
+# ---- Seguridad WiFi - CRITICO: Desactivar WPA3 para compatibilidad con RPi ----
+# La Raspberry Pi 3 hotspot solo soporta WPA1/WPA2, NO WPA3
+CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=n
+CONFIG_ESP_WIFI_ENABLE_WPA3_OWE_STA=n
 
 # ---- Partición de flash ----
 CONFIG_PARTITION_TABLE_CUSTOM=y

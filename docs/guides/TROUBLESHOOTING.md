@@ -353,10 +353,10 @@ ros2 topic hz /biofloc/sensor_data --window 5
 ## 📞 Contacto de Soporte
 
 | Nivel | Contacto | Tiempo de Respuesta |
-|-------|----------|--------------------|
+|-------|---------|--------------------||
 | L1 - Operador | Consultar esta guía | Inmediato |
 | L2 - Técnico | Equipo de Ingeniería | < 4 horas |
-| L3 - Desarrollo | [@Marton1123](https://github.com/Marton1123) | < 24 horas |
+| L3 - Desarrollo | Equipo de Desarrollo | < 24 horas |
 
 ---
 

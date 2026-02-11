@@ -37,8 +37,12 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 ESP_IDF_PATH = Path.home() / "esp" / "v5.3.4" / "esp-idf"
 MICROROS_WS = Path.home() / "microros_ws"
 
+# Detect if running on Raspberry Pi (ARM architecture)
+import platform
+IS_RASPBERRY_PI = platform.machine().startswith('aarch64') or platform.machine().startswith('armv')
+
 # Network configuration from .env (with defaults for backward compatibility)
-ESP32_MAC = os.getenv("ESP32_MAC", "24:0a:c4:60:c8:e0")
+ESP32_MAC = os.getenv("ESP32_MAC", "XX:XX:XX:XX:XX:XX")
 GATEWAY_IP = os.getenv("GATEWAY_IP", "10.42.0.1")
 NETWORK_RANGE = os.getenv("GATEWAY_NETWORK", "10.42.0.0/24")
 
@@ -102,11 +106,19 @@ def check_prerequisites():
     """Check if all required tools are available"""
     print_info("Verificando prerequisitos...")
     
-    checks = [
-        ("ESP-IDF", ESP_IDF_PATH.exists()),
-        ("Workspace micro-ROS", MICROROS_WS.exists()),
-        ("Directorio scripts", SCRIPTS_DIR.exists()),
-    ]
+    # On Raspberry Pi, ESP-IDF is optional (acts only as Gateway)
+    if IS_RASPBERRY_PI:
+        print_warning("Raspberry Pi detectada - Modo Gateway (sin compilación de firmware)")
+        checks = [
+            ("Workspace micro-ROS", MICROROS_WS.exists()),
+            ("Directorio scripts", SCRIPTS_DIR.exists()),
+        ]
+    else:
+        checks = [
+            ("ESP-IDF", ESP_IDF_PATH.exists()),
+            ("Workspace micro-ROS", MICROROS_WS.exists()),
+            ("Directorio scripts", SCRIPTS_DIR.exists()),
+        ]
     
     all_ok = True
     for name, exists in checks:
@@ -360,7 +372,7 @@ def configure_wifi():
     print_header("Configuración WiFi")
     
     print_info("Configuración actual:")
-    print(f"  SSID Gateway: lab-ros2-nuc")
+    print(f"  SSID Gateway: <configurado en .env>")
     print(f"  IP Gateway: 10.42.0.1")
     print()
     
@@ -662,7 +674,7 @@ def check_esp32_connectivity():
         print_warning("Esto puede tomar 30-60 segundos...")
         
         result = subprocess.run(
-            "nmap -sn 10.42.0.0/24 2>/dev/null | grep -B 2 '24:0A:C4:60:C8:E0' | grep 'Nmap scan' | awk '{print $5}'",
+            "nmap -sn 10.42.0.0/24 2>/dev/null | grep -B 2 'XX:XX:XX:XX:XX:XX' | grep 'Nmap scan' | awk '{print $5}'",
             shell=True,
             capture_output=True,
             text=True
@@ -739,7 +751,7 @@ def check_esp32_connectivity():
         print_error("ESP32 NO ENCONTRADO en la red")
         print_info("Pasos para solucionar:")
         print("  1. Verifica que el ESP32 esté encendido")
-        print("  2. Revisa las credenciales WiFi (lab-ros2-nuc / ni2dEUVd)")
+        print("  2. Revisa las credenciales WiFi en sdkconfig.defaults")
         print("  3. Verifica que el hotspot gateway esté activo")
         print("  4. Revisa el monitor serial del ESP32 para errores de conexión")
 

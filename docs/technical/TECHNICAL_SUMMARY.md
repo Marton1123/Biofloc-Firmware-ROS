@@ -95,8 +95,8 @@ Internet
    | Firewall: iptables FORWARD DROP
    |
    | WiFi Hotspot (wlo1)
-   | SSID: lab-ros2-nuc
-   | Password: ni2dEUVd
+   | SSID: <tu-ssid-gateway>
+   | Password: <tu-password-seguro>
    |
 [ESP32]
    | MAC: 24:0a:c4:60:c8:e0
@@ -109,13 +109,13 @@ Internet
 **IMPORTANTE:** Dual WiFi credentials (micro_ros + biofloc):
 ```ini
 # Credenciales para componente micro_ros_espidf_component
-CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
-CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_ESP_WIFI_PASSWORD="<tu-password-seguro>"
 CONFIG_ESP_MAXIMUM_RETRY=15
 
 # Credenciales para aplicación biofloc (main)
-CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"
-CONFIG_BIOFLOC_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_BIOFLOC_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_BIOFLOC_WIFI_PASSWORD="<tu-password-seguro>"
 
 # Agent (Gateway IP en red interna)
 CONFIG_MICRO_ROS_AGENT_IP="10.42.0.1"
@@ -142,8 +142,8 @@ CONFIG_BIOFLOC_TIMEZONE="CLT3"
 
 ### MongoDB (.env)
 ```bash
-MONGODB_URI=mongodb+srv://sistemaslab:PASSWORD@sistemaslab.hk30i2k.mongodb.net/?retryWrites=true&w=majority&appName=SistemasLab
-MONGODB_DB=SistemasLab
+MONGODB_URI=mongodb+srv://usuario:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority&appName=TuApp
+MONGODB_DB=TuDatabase
 MONGODB_COLLECTION=telemetria
 ```
 
@@ -283,7 +283,7 @@ python3 scripts/monitor_sensores.py
 2. Verificar bridge ejecutando: `ps aux | grep sensor_db_bridge`
 3. Revisar `.env` con credenciales correctas
 4. Verificar IP whitelisting en MongoDB Atlas
-5. Probar conexión: `ping sistemaslab.hk30i2k.mongodb.net`
+5. Probar conexión: `ping <tu-cluster>.mongodb.net`
 
 ---
 

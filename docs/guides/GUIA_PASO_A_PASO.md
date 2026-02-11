@@ -20,7 +20,7 @@
 ### Hardware
 - ✅ **Gateway** Intel NUC o PC Linux con Ubuntu 24.04+
 - ✅ **Gateway** con WiFi (wlo1) + Ethernet (enp88s0)
-- ✅ **ESP32** conectado por USB (`/dev/ttyUSB0`) o WiFi (10.42.0.123)
+- ✅ **ESP32** conectado por USB (`/dev/ttyUSB0`) o WiFi (10.42.0.x)
 - ✅ **Sensor** CWT-BL de pH/Temperatura conectado al ESP32
 - ✅ **Voltage Divider** R1=10kΩ, R2=20kΩ (factor 1.5) en ambos sensores
 
@@ -32,9 +32,9 @@
 - ✅ **biofloc_manager.py** (gestor unificado)
 
 ### Red (Arquitectura Gateway Seguro)
-- ✅ Hotspot WiFi en gateway: SSID `lab-ros2-nuc`, IP `10.42.0.1/24`
+- ✅ Hotspot WiFi en gateway: SSID `<tu-ssid-gateway>`, IP `10.42.0.1/24`
 - ✅ Firewall iptables: FORWARD DROP (ESP32 sin internet)
-- ✅ ESP32 obtiene IP `10.42.0.123` vía DHCP
+- ✅ ESP32 obtiene IP `10.42.0.x` vía DHCP
 - ✅ ESP32 se comunica SOLO con gateway (UDP 8888)
 
 ---
@@ -47,8 +47,8 @@
 # Crear hotspot WiFi en gateway
 nmcli device wifi hotspot \
   ifname wlo1 \
-  ssid "lab-ros2-nuc" \
-  password "ni2dEUVd"
+  ssid "<tu-ssid-gateway>" \
+  password "<tu-password-seguro>"
 
 # Configurar autoconexión
 nmcli connection modify Hotspot connection.autoconnect yes
@@ -77,12 +77,12 @@ nano sdkconfig.defaults
 **Cambiar ambos sets de credenciales:**
 ```ini
 # Credenciales para micro_ros_espidf_component
-CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
-CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_ESP_WIFI_PASSWORD="<tu-password-seguro>"
 
 # Credenciales para aplicación biofloc
-CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"
-CONFIG_BIOFLOC_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_BIOFLOC_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_BIOFLOC_WIFI_PASSWORD="<tu-password-seguro>"
 ```
 
 ⚠️ **IMPORTANTE:** Ambos sets deben ser idénticos.
@@ -126,8 +126,8 @@ idf.py -p /dev/ttyUSB0 monitor
 
 **Debe mostrar:**
 ```
-I (3421) WIFI: WiFi connected to lab-ros2-nuc
-I (3425) WIFI: Got IP: 10.42.0.123
+I (3421) WIFI: WiFi connected to <tu-ssid-gateway>
+I (3425) WIFI: Got IP: 10.42.0.x
 I (3430) MAIN: Connecting to micro-ROS agent at 10.42.0.1:8888
 ```
 
@@ -299,7 +299,7 @@ nmcli connection show --active | grep Hotspot
 ip addr show wlo1
 
 # Ver si ESP32 está en DHCP leases
-cat /var/lib/NetworkManager/dnsmasq-wlo1.leases | grep 24:0a:c4:60:c8:e0
+cat /var/lib/NetworkManager/dnsmasq-wlo1.leases | grep XX:XX:XX:XX:XX:XX
 
 # Ver en ARP table
 ip neigh show dev wlo1
@@ -326,8 +326,8 @@ python3 biofloc_manager.py
 
 **Si falla:**
 1. Verificar que Agent esté corriendo (opción [1])
-2. Verificar que ESP32 tenga IP 10.42.0.123
-3. Hacer ping al ESP32: `ping -c 3 10.42.0.123`
+2. Verificar que ESP32 tenga IP 10.42.0.x
+3. Hacer ping al ESP32: `ping -c 3 10.42.0.x`
 4. Revisar firewall permite UDP 8888
 
 ### Datos no llegan a MongoDB
@@ -587,6 +587,4 @@ echo "=== FIN VERIFICACIÓN ==="
 ---
 
 **Versión:** 1.0.0  
-**Última actualización:** 2026-01-22  
-**Autor:** [@Marton1123](https://github.com/Marton1123)  
-**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)
+**Última actualización:** 2026-01-22

@@ -76,8 +76,8 @@ MONGODB_COLLECTION_DEVICES=...
 # 2. Gateway Configuration
 GATEWAY_IP=10.42.0.1
 GATEWAY_WIFI_INTERFACE=wlo1
-GATEWAY_WIFI_SSID=lab-ros2-nuc
-GATEWAY_WIFI_PASSWORD=ni2dEUVd
+GATEWAY_WIFI_SSID=<tu-ssid-gateway>
+GATEWAY_WIFI_PASSWORD=<tu-password-seguro>
 GATEWAY_NETWORK=10.42.0.0/24
 
 # 3. ESP32 Configuration
@@ -245,8 +245,8 @@ cat >> .env << 'EOF'
 # ---- Gateway Configuration ----
 GATEWAY_IP=10.42.0.1
 GATEWAY_WIFI_INTERFACE=wlo1
-GATEWAY_WIFI_SSID=lab-ros2-nuc
-GATEWAY_WIFI_PASSWORD=ni2dEUVd
+GATEWAY_WIFI_SSID=<tu-ssid-gateway>
+GATEWAY_WIFI_PASSWORD=<tu-password-seguro>
 GATEWAY_NETWORK=10.42.0.0/24
 
 # ---- ESP32 Configuration ----

@@ -147,7 +147,7 @@ def check_esp32_firmware():
                 
             # Check critical settings
             checks = {
-                'WiFi SSID': ('CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"', 
+                'WiFi SSID': ('CONFIG_BIOFLOC_WIFI_SSID="<tu-ssid>"', 
                              'SSID configurado correctamente'),
                 'Agent IP': ('CONFIG_BIOFLOC_AGENT_IP="10.42.0.1"',
                             'IP del gateway configurada'),

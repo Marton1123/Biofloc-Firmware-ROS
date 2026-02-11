@@ -4,9 +4,9 @@
 
 | Metadatos | Valor |
 |-----------|-------|
-| **Versión Firmware** | 3.0.0 (Secure Gateway) |
+| **Versión Firmware** | 3.0.0 (Raspberry Pi 3 Gateway) |
 | **Versión Gestor** | 1.0.0 (biofloc_manager.py) |
-| **Última Actualización** | 2026-02-10 |
+| **Última Actualización** | 2026-02-11 |
 | **Autor** | [@Marton1123](https://github.com/Marton1123) |
 
 ---
@@ -28,7 +28,9 @@
 |-----------|-----------|---------|
 | **🚀 Ejecutar el proyecto** | [docs/guides/GUIA_PASO_A_PASO.md](docs/guides/GUIA_PASO_A_PASO.md) | Completo |
 | **🛠️ Gestor unificado** | [biofloc_manager.py](biofloc_manager.py) | Ejecutar `python3 biofloc_manager.py` |
-| **🔒 Migrar a gateway seguro** | [docs/guides/MIGRATION_GUIDE_SECURE_GATEWAY.md](docs/guides/MIGRATION_GUIDE_SECURE_GATEWAY.md) | Completo |
+| **🍓 Migrar a Raspberry Pi 3** | [docs/guides/RASPBERRY_PI_MIGRATION.md](docs/guides/RASPBERRY_PI_MIGRATION.md) | Completo (390 líneas) |
+| **📶 Fix WiFi WPA** | [docs/technical/WIFI_WPA_COMPATIBILITY_FIX.md](docs/technical/WIFI_WPA_COMPATIBILITY_FIX.md) | Error 211/201 solucionado |
+| **🔒 Migrar a gateway seguro** | [docs/guides/MIGRATION_GUIDE_SECURE_GATEWAY.md](docs/guides/MIGRATION_GUIDE_SECURE_GATEWAY.md) | Completo (genérico) |
 | **Instalación inicial** | [QUICKSTART.md](QUICKSTART.md) | Instalación |
 | **Sistema no responde** | [docs/guides/TROUBLESHOOTING.md](docs/guides/TROUBLESHOOTING.md) | Procedimiento de Recuperación |
 | **Calibración de pH** | [docs/guides/CALIBRATION.md](docs/guides/CALIBRATION.md) | Calibración 3 Puntos |
@@ -37,7 +39,7 @@
 | **Referencia de API** | [main/sensors.h](main/sensors.h) | Documentación de Funciones |
 | **Estado del proyecto** | [docs/technical/PROJECT_STATUS.md](docs/technical/PROJECT_STATUS.md) | Métricas |
 | **Guías de seguridad** | [docs/SECURITY.md](docs/SECURITY.md) | Completo |
-| **Historial cambios** | [docs/releases/CHANGELOG.md](docs/releases/CHANGELOG.md) | v3.0.0 |
+| **Historial cambios** | [CHANGELOG.md](CHANGELOG.md) | v3.0.0 (2026-02-11) |
 | **Notas de versión** | [docs/releases/RELEASE_NOTES_v3.0.0.md](docs/releases/RELEASE_NOTES_v3.0.0.md) | v3.0.0 |
 | **Organización config** | [docs/technical/CONFIG_ORGANIZATION_PROPOSAL.md](docs/technical/CONFIG_ORGANIZATION_PROPOSAL.md) | Estructura .env |
 

@@ -1,14 +1,11 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 2.2.0 - Added pH calibration system
+ * @version 3.0.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
- *
- * @author  @Marton1123 (https://github.com/Marton1123)
- * @date    2026
  */
 
 #include <string.h>

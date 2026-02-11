@@ -13,7 +13,6 @@
  *   pH = V_sensor * 2.8
  *   Temperature = V_sensor * 20.0 - 20.0
  *
- * @author  @Marton1123 (https://github.com/Marton1123)
  * @date    2026
  */
 

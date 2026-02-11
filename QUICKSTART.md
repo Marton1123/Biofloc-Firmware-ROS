@@ -306,8 +306,8 @@ idf.py menuconfig → Biofloc Configuration → Agent IP
 # Verificar .env
 cat scripts/.env
 
-# Probar conexión
-ping sistemaslab.hk30i2k.mongodb.net
+# Probar conexión (reemplaza con tu cluster)
+ping <tu-cluster>.mongodb.net
 
 # Verificar IP whitelisting en MongoDB Atlas
 # Dashboard → Network Access → Add IP Address → 0.0.0.0/0 (testing)
