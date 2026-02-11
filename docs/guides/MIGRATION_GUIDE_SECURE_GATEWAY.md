@@ -21,14 +21,14 @@ Internet
    |
    | (Ethernet - enp88s0 o similar)
    |
-[GATEWAY - Intel NUC/PC Linux]
-   | - Ubuntu 24.04+
+[GATEWAY - Raspberry Pi 3 / Intel NUC / PC Linux]
+   | - Ubuntu Server 24.04+ (ARM64 para RPi3)
    | - iptables FORWARD DROP (firewall)
    | - Agente micro-ROS en UDP 8888
    | - Scripts Python (bridge, monitor)
    | - MongoDB cliente (conecta a cloud)
    |
-   | (WiFi - wlo1 o similar - Hotspot)
+   | (WiFi - wlan0 en RPi3, wlo1 en NUC - Hotspot)
    | Red: 10.42.0.0/24
    | Gateway: 10.42.0.1
    |
@@ -43,9 +43,9 @@ Internet
 ### 1.1. Crear Hotspot WiFi (NetworkManager)
 
 ```bash
-# Crear hotspot en interfaz WiFi
+# Crear hotspot en interfaz WiFi (wlan0 en RPi3, wlo1 en NUC)
 nmcli device wifi hotspot \
-  ifname wlo1 \
+  ifname wlan0 \
   ssid "tu-gateway-iot" \
   password "tu-password-seguro"
 

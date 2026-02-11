@@ -18,8 +18,8 @@
 ## 1. Requisitos Previos
 
 ### Hardware
-- ✅ **Gateway** Intel NUC o PC Linux con Ubuntu 24.04+
-- ✅ **Gateway** con WiFi (wlo1) + Ethernet (enp88s0)
+- ✅ **Gateway** Raspberry Pi 3 con Ubuntu Server 24.04 (o NUC/PC Linux)
+- ✅ **Gateway** con WiFi (wlan0) + Ethernet (eth0)
 - ✅ **ESP32** conectado por USB (`/dev/ttyUSB0`) o WiFi (10.42.0.x)
 - ✅ **Sensor** CWT-BL de pH/Temperatura conectado al ESP32
 - ✅ **Voltage Divider** R1=10kΩ, R2=20kΩ (factor 1.5) en ambos sensores
@@ -44,9 +44,9 @@
 ### Paso 2.1: Configurar Gateway (Hotspot WiFi)
 
 ```bash
-# Crear hotspot WiFi en gateway
+# Crear hotspot WiFi en gateway (wlan0 en RPi3, wlo1 en NUC)
 nmcli device wifi hotspot \
-  ifname wlo1 \
+  ifname wlan0 \
   ssid "<tu-ssid-gateway>" \
   password "<tu-password-seguro>"
 
@@ -586,5 +586,5 @@ echo "=== FIN VERIFICACIÓN ==="
 
 ---
 
-**Versión:** 1.0.0  
-**Última actualización:** 2026-01-22
+**Versión:** 3.0.0  
+**Última actualización:** 2026-02-11

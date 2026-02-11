@@ -1,8 +1,8 @@
 # 📊 Estado del Proyecto - Biofloc Firmware ROS
 
-**Última actualización:** 10 de Febrero, 2026  
-**Versión actual:** v3.0.0 (Secure Gateway + Manager)  
-**Estado:** ✅ **OPERACIONAL** - Sistema con gateway seguro y gestor unificado
+**Última actualización:** 11 de Febrero, 2026  
+**Versión actual:** v3.0.0 (Raspberry Pi 3 Gateway)  
+**Estado:** ✅ **OPERACIONAL** - Sistema migrado a Raspberry Pi 3 con gateway seguro
 
 ---
 
@@ -82,12 +82,12 @@
 ```
 Internet
    |
-   | Ethernet (enp88s0) - DHCP del ISP
+   | Ethernet (eth0) - DHCP del ISP
    |
 ┌─────────────────────────────────────┐
-│  Gateway - NUC Ubuntu 24.04         │
-│  ├─ WiFi Hotspot (wlo1)             │
-│  │  ├─ SSID: lab-ros2-nuc           │
+│  Gateway - Raspberry Pi 3           │
+│  ├─ WiFi Hotspot (wlan0)            │
+│  │  ├─ SSID: Biofloc-Gateway        │
 │  │  ├─ IP: 10.42.0.1/24             │
 │  │  └─ DHCP Server activo           │
 │  ├─ Firewall iptables               │
@@ -197,7 +197,7 @@ Internet
 ### Código Fuente (C)
 | Archivo | Líneas | Descripción | Estado |
 |---------|--------|-------------|--------|
-| `main/main.c` | 448 | Firmware principal | ✅ v2.2.0 |
+| `main/main.c` | 411 | Firmware principal | ✅ v3.0.0 |
 | `main/sensors.c` | 500+ | Módulo de sensores | ✅ Estable |
 | `main/sensors.h` | 80+ | Headers del módulo | ✅ Estable |
 
@@ -245,7 +245,7 @@ Internet
 - ✅ Publicación JSON estructurada
 - ✅ Integración con MongoDB Atlas
 
-### v2.2.0 (21 Ene 2026) ⭐ **ACTUAL**
+### v3.0.0 (11 Feb 2026) ⭐ **ACTUAL**
 - ✅ Corrección voltage divider: 3.0 → 1.474
 - ✅ Calibración pH 3 puntos: R²=0.9997
 - ✅ Precisión mejorada: ±7.71 pH → ±0.03 pH
@@ -257,19 +257,19 @@ Internet
 
 ## 📅 Roadmap Futuro
 
-### v2.3.0 (Planificado - Febrero 2026)
-- [ ] Calibración sensor de temperatura
+### v3.1.0 (Planificado - Marzo 2026)
+- [ ] Calibración sensor de temperatura mejorada
 - [ ] Implementar filtro Kalman para temperatura
 - [ ] Agregar sensor de oxígeno disuelto (DO)
 - [ ] Dashboard web básico (Grafana?)
 
-### v2.4.0 (Planificado - Marzo 2026)
+### v3.2.0 (Planificado - Abril 2026)
 - [ ] Sistema de alertas (pH fuera de rango)
 - [ ] Modo de ahorro de energía (deep sleep)
 - [ ] OTA updates (actualización remota)
 - [ ] Logging local en SD card
 
-### v3.0.0 (Planificado - Q2 2026)
+### v4.0.0 (Planificado - Q3 2026)
 - [ ] Soporte multi-dispositivo (mesh network?)
 - [ ] Machine learning para predicción de pH
 - [ ] Interfaz web completa (React + Node.js)
@@ -283,15 +283,15 @@ Internet
 ❌ **Ninguno** - Sistema completamente funcional
 
 ### Menores
-⚠️ **Temperatura errática:** Sensor muestra valores entre -6°C y +7°C
+⚠️ **Temperatura errática:** Sensor muestra valores variables
 - **Causa:** Sensor no calibrado o defectuoso
 - **Impacto:** BAJO - pH es el sensor principal
-- **Solución:** Calibración de temperatura pendiente (v2.3.0)
+- **Solución:** Calibración de temperatura pendiente (v3.1.0)
 
 ⚠️ **Warning datetime.utcnow():** Deprecation warning en Python 3.12
 - **Causa:** Método obsoleto en datetime
 - **Impacto:** NULO - Funcional, solo warning
-- **Solución:** Actualizar a datetime.now(timezone.utc) (v2.3.0)
+- **Solución:** Actualizar a datetime.now(timezone.utc) (v3.1.0)
 
 ### Mejoras Pendientes
 💡 **Filtro de lecturas:** Agregar filtro de mediana para temperatura  
@@ -325,7 +325,7 @@ Internet
 ## 📞 Información de Contacto
 
 **Proyecto:** Biofloc Firmware ROS  
-**Versión:** 2.2.0  
+**Versión:** 3.0.0  
 **Licencia:** MIT  
 **Mantenedor:** [@Marton1123](https://github.com/Marton1123)  
 

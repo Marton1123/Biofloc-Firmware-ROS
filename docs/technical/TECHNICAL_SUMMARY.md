@@ -87,14 +87,14 @@ pH = 2.559823 × V_sensor + 0.469193
 ```
 Internet
    |
-   | Ethernet (enp88s0)
+   | Ethernet (eth0)
    |
-[Gateway - NUC Ubuntu 24.04]
+[Gateway - Raspberry Pi 3 / Ubuntu Server 24.04]
    | IP Ethernet: (DHCP de ISP)
    | IP WiFi: 10.42.0.1/24
    | Firewall: iptables FORWARD DROP
    |
-   | WiFi Hotspot (wlo1)
+   | WiFi Hotspot (wlan0 en RPi3, wlo1 en NUC)
    | SSID: <tu-ssid-gateway>
    | Password: <tu-password-seguro>
    |
@@ -344,12 +344,12 @@ python3 scripts/monitor_sensores.py
 ## 📞 Contacto y Soporte
 
 **Proyecto:** Biofloc Firmware ROS  
-**Versión:** 2.2.0  
+**Versión:** 3.0.0  
 **Repositorio:** [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)  
 **Documentación:** README.md, docs/CALIBRATION.md  
 **Licencia:** MIT
 
 ---
 
-**Última actualización:** 2026-01-22  
-**Próxima revisión:** Trimestral (Abril 2026)
+**Última actualización:** 2026-02-11  
+**Próxima revisión:** Trimestral (Mayo 2026)

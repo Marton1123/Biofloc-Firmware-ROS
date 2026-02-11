@@ -4,8 +4,8 @@
 
 | Metadatos | Valor |
 |-----------|-------|
-| **Versión** | 2.2.0 |
-| **Última Actualización** | 2026-01-22 |
+| **Versión** | 3.0.0 |
+| **Última Actualización** | 2026-02-11 |
 | **Tiempo de Resolución Esperado** | 5-15 minutos |
 
 ---
@@ -360,6 +360,6 @@ ros2 topic hz /biofloc/sensor_data --window 5
 
 ---
 
-**Versión del Documento:** 2.0.0  
-**Última Revisión:** 2026-01-22  
+**Versión del Documento:** 3.0.0  
+**Última Revisión:** 2026-02-11  
 **Próxima Revisión:** 2026-04-22

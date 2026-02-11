@@ -12,7 +12,7 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
 ### 🔒 Seguridad - Arquitectura Gateway
 - **Gateway IoT Seguro**: ESP32 aislado de internet mediante firewall iptables
-  - Hotspot WiFi en gateway (SSID: lab-ros2-nuc, red 10.42.0.1/24)
+  - Hotspot WiFi en gateway (SSID: Biofloc-Gateway, red 10.42.0.1/24)
   - Firewall iptables con política FORWARD DROP
   - ESP32 solo puede comunicarse con gateway (UDP 8888 para micro-ROS)
   - Gateway tiene doble conexión: WiFi para ESP32 + Ethernet para servicios cloud
