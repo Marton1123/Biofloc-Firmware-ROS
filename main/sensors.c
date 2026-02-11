@@ -442,17 +442,11 @@ esp_err_t sensors_read_all(sensors_data_t *data)
     sensors_read_ph(&data->ph);
     sensors_read_temperature(&data->temperature);
 
-    /* Get timestamp */
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    data->timestamp_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
-
-    /* Format ISO 8601 timestamp */
-    time_t now = tv.tv_sec;
-    struct tm timeinfo;
-    localtime_r(&now, &timeinfo);
-    strftime(data->timestamp_iso, sizeof(data->timestamp_iso),
-             "%Y-%m-%dT%H:%M:%S%z", &timeinfo);
+    /* Simple sample counter (timestamp will be added by server) */
+    static uint32_t sample_count = 0;
+    sample_count++;
+    data->timestamp_ms = sample_count;
+    snprintf(data->timestamp_iso, sizeof(data->timestamp_iso), "sample_%lu", (unsigned long)sample_count);
 
     return (data->ph.valid || data->temperature.valid) ? ESP_OK : ESP_FAIL;
 }

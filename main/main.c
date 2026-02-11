@@ -20,7 +20,6 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
-#include "esp_sntp.h"
 #include "esp_wifi.h"
 
 #include <uros_network_interfaces.h>
@@ -49,8 +48,6 @@
 #define PING_RETRIES            CONFIG_BIOFLOC_PING_RETRIES
 #define SAMPLE_INTERVAL_MS      CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
-#define NTP_SERVER              CONFIG_BIOFLOC_NTP_SERVER
-#define TIMEZONE                CONFIG_BIOFLOC_TIMEZONE
 
 #ifndef CONFIG_MICRO_ROS_APP_STACK
 #define CONFIG_MICRO_ROS_APP_STACK 16000
@@ -64,8 +61,9 @@
 #define SENSOR_TASK_PRIO        4
 #define JSON_BUFFER_SIZE        512
 #define PING_CHECK_INTERVAL_MS  30000
-#define RECONNECT_ATTEMPTS      5
+#define RECONNECT_ATTEMPTS      10
 #define RECONNECT_DELAY_MS      2000
+#define RECONNECT_BACKOFF_MAX   30000  /* Max 30s between retries */
 #define RESTART_DELAY_MS        3000
 
 /* ============================================================================
@@ -75,7 +73,6 @@
 static const char *TAG_MAIN   = "BIOFLOC";
 static const char *TAG_UROS   = "UROS";
 static const char *TAG_SENSOR = "SENSOR";
-static const char *TAG_NTP    = "NTP";
 
 /* ============================================================================
  * Error Handling Macros
@@ -114,54 +111,12 @@ typedef struct {
     char device_id[24];
     char mac_address[18];
     char ip_address[16];
-    bool time_synced;
     bool microros_ready;
 } app_state_t;
 
 static microros_context_t g_uros_ctx = {0};
 static app_state_t g_app_state = {0};
 static char g_agent_port_str[8];
-
-/* ============================================================================
- * NTP Time Synchronization
- * ============================================================================ */
-
-static void ntp_sync_callback(struct timeval *tv)
-{
-    (void)tv;
-    g_app_state.time_synced = true;
-
-    time_t now = time(NULL);
-    struct tm timeinfo;
-    localtime_r(&now, &timeinfo);
-
-    char time_str[64];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S %Z", &timeinfo);
-    ESP_LOGI(TAG_NTP, "Time synchronized: %s", time_str);
-}
-
-static void init_ntp(void)
-{
-    ESP_LOGI(TAG_NTP, "Initializing SNTP (server: %s)", NTP_SERVER);
-
-    setenv("TZ", TIMEZONE, 1);
-    tzset();
-
-    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, NTP_SERVER);
-    esp_sntp_set_time_sync_notification_cb(ntp_sync_callback);
-    esp_sntp_init();
-
-    const int max_retry = 15;
-    for (int retry = 0; retry < max_retry && !g_app_state.time_synced; retry++) {
-        ESP_LOGI(TAG_NTP, "Waiting for time sync... (%d/%d)", retry + 1, max_retry);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    if (!g_app_state.time_synced) {
-        ESP_LOGW(TAG_NTP, "Time sync timeout - using default time");
-    }
-}
 
 /* ============================================================================
  * Network Utilities
@@ -213,15 +168,26 @@ static bool ping_agent(rmw_init_options_t *rmw_options, int timeout_ms, int retr
 
 static bool try_reconnect(void)
 {
+    uint32_t delay_ms = RECONNECT_DELAY_MS;
+    
     for (int i = 0; i < RECONNECT_ATTEMPTS; i++) {
-        ESP_LOGI(TAG_UROS, "Reconnection attempt %d/%d", i + 1, RECONNECT_ATTEMPTS);
-        vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+        ESP_LOGI(TAG_UROS, "Reconnection attempt %d/%d (delay: %lums)", 
+                 i + 1, RECONNECT_ATTEMPTS, delay_ms);
+        
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
         if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) == RMW_RET_OK) {
-            ESP_LOGI(TAG_UROS, "Reconnected successfully");
+            ESP_LOGI(TAG_UROS, "✅ Reconnected successfully");
             return true;
         }
+        
+        /* Exponential backoff: 2s, 4s, 8s, 16s, 30s, 30s... */
+        delay_ms = (delay_ms * 2 > RECONNECT_BACKOFF_MAX) 
+                   ? RECONNECT_BACKOFF_MAX 
+                   : delay_ms * 2;
     }
+    
+    ESP_LOGE(TAG_UROS, "❌ Failed to reconnect after %d attempts", RECONNECT_ATTEMPTS);
     return false;
 }
 
@@ -418,8 +384,8 @@ void app_main(void)
     /* Get device network info */
     get_network_info();
 
-    /* Synchronize time via NTP */
-    init_ntp();
+    ESP_LOGI(TAG_MAIN, "⚠ No Internet access - Running in secure gateway mode");
+    ESP_LOGI(TAG_MAIN, "Timestamps will be added by the server");
 
     /* Create micro-ROS task on APP_CPU */
     ESP_LOGI(TAG_MAIN, "Starting micro-ROS task...");

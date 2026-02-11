@@ -8,13 +8,14 @@ menu "Biofloc Configuration"
     menu "WiFi Configuration"
         config BIOFLOC_WIFI_SSID
             string "WiFi SSID"
-            default "MyNetwork"
+            default "lab-ros2-nuc"
             help
                 SSID (nombre) de la red WiFi a la que se conectará el ESP32.
+                Gateway seguro sin acceso a Internet.
 
         config BIOFLOC_WIFI_PASSWORD
             string "WiFi Password"
-            default "MyPassword"
+            default "ni2dEUVd"
             help
                 Contraseña de la red WiFi. Dejar vacío para redes abiertas.
 
@@ -29,9 +30,10 @@ menu "Biofloc Configuration"
     menu "micro-ROS Agent Configuration"
         config BIOFLOC_AGENT_IP
             string "micro-ROS Agent IP"
-            default "192.168.1.100"
+            default "10.42.0.1"
             help
                 Dirección IP del host donde corre el micro-ROS Agent.
+                En arquitectura de gateway seguro, esta es la IP del hotspot de la NUC.
 
         config BIOFLOC_AGENT_PORT
             int "micro-ROS Agent Port"
@@ -86,11 +88,11 @@ menu "Biofloc Configuration"
 
             config BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR
                 int "Voltage divider factor x1000"
-                default 3000
+                default 1500
                 range 1000 5000
                 help
                     Factor del divisor de tensión multiplicado por 1000.
-                    Ej: Para R1=20k, R2=10k -> factor=3.0 -> valor=3000.
+                    Hardware: R1=10kΩ, R2=20kΩ -> factor=1.5 -> valor=1500.
                     V_sensor = V_adc * (factor/1000)
 
             config BIOFLOC_PH_ENABLED
@@ -111,10 +113,11 @@ menu "Biofloc Configuration"
 
             config BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR
                 int "Voltage divider factor x1000"
-                default 3000
+                default 1500
                 range 1000 5000
                 help
                     Factor del divisor de tensión multiplicado por 1000.
+                    Hardware: R1=10kΩ, R2=20kΩ -> factor=1.5 -> valor=1500.
 
             config BIOFLOC_TEMP_ENABLED
                 bool "Enable Temperature Sensor"
@@ -124,22 +127,22 @@ menu "Biofloc Configuration"
 
             config BIOFLOC_TEMP_SLOPE
                 int "Temperature Calibration Slope x1000000"
-                default 1086092
+                default 1000000
                 range 500000 1500000
                 depends on BIOFLOC_TEMP_ENABLED
                 help
                     Pendiente de calibración de temperatura × 1000000.
-                    Valor por defecto: 1.086092 (calibrado 2026-01-29).
+                    Valor por defecto: 1.0 (sin ajuste de pendiente).
                     Usar scripts/calibrate_temperature.py para recalibrar.
 
             config BIOFLOC_TEMP_OFFSET_MILLIDEGREES
                 int "Temperature Calibration Offset (millidegrees)"
-                default -423
+                default 1382
                 range -5000 5000
                 depends on BIOFLOC_TEMP_ENABLED
                 help
                     Offset de calibración en miligrados (°C × 1000).
-                    Valor por defecto: -0.423°C = -423 millidegrees (calibrado 2026-01-29).
+                    Valor por defecto: +1.382°C = +1382 millidegrees (calibrado 2026-01-29).
                     Usar scripts/calibrate_temperature.py para recalibrar.
         endmenu
     endmenu

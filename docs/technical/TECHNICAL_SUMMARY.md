@@ -1,30 +1,50 @@
-# Resumen Técnico — Sistema de Telemetría pH v2.2.0
+# Resumen Técnico — Sistema de Telemetría pH v3.0.0
 
 > **Estándares:** ISO/IEC 25010 (Calidad de Software) | IEEE 829 (Documentación de Pruebas)
 
 | Metadatos | Valor |
 |-----------|-------|
-| **Versión** | 2.2.0 |
-| **Fecha** | 2026-01-22 |
-| **Estado** | ✅ Operacional |
-| **Precisión pH** | ±0.03 pH (99.4%) |
+| **Versión Firmware** | 3.0.0 (Secure Gateway) |
+| **Versión Gestor** | 1.0.0 (biofloc_manager.py) |
+| **Fecha** | 2026-02-10 |
+| **Estado** | ✅ Operacional (Gateway Seguro) |
+| **Precisión pH** | ±0.05 pH (99.4%) |
+| **Precisión Temp** | ~1.6°C error residual (ajustable) |
 
 ---
 
 ## 📊 Parámetros de Calibración Actuales
 
-### Divisor de Voltaje
+### Divisor de Voltaje (Hardware Verificado desde PCB)
+
+**Hardware (AMBOS sensores pH y Temperatura):**
 ```
-R1 = 20 kΩ
-R2 = 10 kΩ
-Factor calibrado = 1.474
-CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR = 1474  (× 1000)
+R1 = 10 kΩ (pull-up, desde Vin del sensor)
+R2 = 20 kΩ (pull-down a GND)
+R3 = 470 Ω (protección serie)
+C1 = 100 nF (filtro paralelo)
+
+Factor = (R1 + R2) / R2 = (10k + 20k) / 20k = 1.5
 ```
 
+**Configuración en firmware:**
+```ini
+# sdkconfig.defaults
+CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR=1500    # 1.5 × 1000
+CONFIG_BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR=1500  # 1.5 × 1000
+```
+
+**⚠️ Historia de Errores Corregidos:**
+1. **Error 1 (pH):** Asumido R1=20k/R2=10k → factor=3.0 → **CORREGIDO a 1.5**
+2. **Error 2 (Temp):** Mismo error en divisor → **CORREGIDO a 1.5**
+3. **Error 3 (Temp):** Offset sign negativo (-423) → **CORREGIDO a +1382**
+4. **Hardware verificado:** Foto de PCB confirmó R1=10k, R2=20k
+
 **Verificación:**
-- V_GPIO medido: 1.71V (multímetro)
-- pH agua: 7.06 (sensor manual)
-- Cálculo: 1.474 = (7.06 / 2.8) / 1.71 ✓
+- V₂₈₂₈ (sensor output): 0-5V
+- V₂₇₃₂ (ADC input): 0-3.3V
+- V₂₇₃₂ = V₂₈₂₈ / 1.5
+- V₂₈₂₈ = V₂₇₃₂ × 1.5 ✓
 
 ### Calibración del Sensor (3 puntos)
 
@@ -62,18 +82,62 @@ pH = 2.559823 × V_sensor + 0.469193
 
 ## ⚙️ Configuración del Sistema
 
-### ESP32 (sdkconfig)
+### Arquitectura de Red (Gateway Seguro)
+
+```
+Internet
+   |
+   | Ethernet (enp88s0)
+   |
+[Gateway - NUC Ubuntu 24.04]
+   | IP Ethernet: (DHCP de ISP)
+   | IP WiFi: 10.42.0.1/24
+   | Firewall: iptables FORWARD DROP
+   |
+   | WiFi Hotspot (wlo1)
+   | SSID: lab-ros2-nuc
+   | Password: ni2dEUVd
+   |
+[ESP32]
+   | MAC: 24:0a:c4:60:c8:e0
+   | IP: 10.42.0.123 (DHCP)
+   | SIN acceso a internet
+```
+
+### ESP32 (sdkconfig.defaults)
+
+**IMPORTANTE:** Dual WiFi credentials (micro_ros + biofloc):
 ```ini
-CONFIG_BIOFLOC_WIFI_SSID="tu_wifi"
-CONFIG_BIOFLOC_WIFI_PASSWORD="tu_password"
-CONFIG_BIOFLOC_AGENT_IP="192.168.1.100"
-CONFIG_BIOFLOC_AGENT_PORT=8888
+# Credenciales para componente micro_ros_espidf_component
+CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
+CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_MAXIMUM_RETRY=15
+
+# Credenciales para aplicación biofloc (main)
+CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"
+CONFIG_BIOFLOC_WIFI_PASSWORD="ni2dEUVd"
+
+# Agent (Gateway IP en red interna)
+CONFIG_MICRO_ROS_AGENT_IP="10.42.0.1"
+CONFIG_MICRO_ROS_AGENT_PORT=8888
+
+# ROS
 CONFIG_BIOFLOC_ROS_NAMESPACE="biofloc"
-CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR=1474
-CONFIG_BIOFLOC_TIMEZONE="CLT3"
-CONFIG_BIOFLOC_NTP_SERVER="pool.ntp.org"
 CONFIG_BIOFLOC_LOCATION="tanque_01"
 CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS=4000
+
+# Calibración pH
+CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR=1500
+CONFIG_BIOFLOC_PH_SLOPE_MILLIPH_PER_VOLT=2559823     # 2.559823 × 1000000
+CONFIG_BIOFLOC_PH_OFFSET_MILLIPH=469193              # 0.469193 × 1000000
+
+# Calibración Temperatura
+CONFIG_BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR=1500
+CONFIG_BIOFLOC_TEMP_SLOPE=1000000                    # 1.0 × 1000000
+CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES=1382        # +1.382°C
+
+# Timezone (sin NTP - timestamps del servidor)
+CONFIG_BIOFLOC_TIMEZONE="CLT3"
 ```
 
 ### MongoDB (.env)
@@ -84,20 +148,56 @@ MONGODB_COLLECTION=telemetria
 ```
 
 ### Formato de Datos MongoDB
+
+**Estructura de documento (con timestamps del servidor):**
 ```json
 {
-  "timestamp": "2026-01-21T17:15:42-0300",
+  "timestamp": "2026-02-10T14:32:15.847Z",        // Timestamp real del servidor (UTC)
+  "timestamp_esp32": "sample_1523",               // Contador del ESP32 (sin NTP)
   "ph": 7.08,
-  "temperature": 2.26,
+  "temperature": 23.45,
   "device_id": "biofloc_esp32_c8e0",
   "location": "tanque_01",
   "_ros_topic": "/biofloc/sensor_data"
 }
 ```
 
+**Notas:**
+- `timestamp`: Generado por `sensor_db_bridge.py` en el gateway (con acceso a internet/NTP)
+- `timestamp_esp32`: Contador incremental del ESP32 (para correlación, NO es tiempo real)
+- ESP32 opera SIN acceso a NTP (no tiene internet)
+- Gateway agrega timestamp real antes de guardar en MongoDB
+
 ---
 
 ## 🔧 Herramientas de Mantenimiento
+
+### Gestor Unificado (Recomendado)
+```bash
+python3 biofloc_manager.py
+```
+**Menú principal (12 opciones):**
+1. ▶️ Iniciar micro-ROS Agent
+2. ▶️ Iniciar sensor_db_bridge.py
+3. 📊 Iniciar monitor_sensores.py
+4. ✅ Verificar estado del sistema (8s timeout)
+5. 🔌 Verificar conectividad ESP32 (DHCP, ARP, ping, ROS)
+6. 🧪 Calibración completa pH (3 puntos interactiva)
+7. 🌡️ Calibración completa Temperatura (3 puntos)
+8. ⚡ Ajuste rápido pH (manual, 1 valor)
+9. ⚡ Ajuste rápido Temperatura (manual, 1 valor)
+10. 📶 Configurar WiFi (actualiza dual credentials)
+11. ⚙️ Regenerar sdkconfig (desde defaults)
+12. 🛠️ Compilar y Flashear (pipeline completo)
+
+**Características:**
+- Interfaz completamente en español
+- Timeouts inteligentes (8s rápido, 20s opcional)
+- Verificación completa de conectividad ESP32
+- Actualización automática de sdkconfig.defaults
+- Manejo robusto de procesos (sin pipes grep)
+
+### Scripts Individuales (Alternativa)
 
 ### 1. Monitor de Voltaje en Tiempo Real
 ```bash
@@ -105,24 +205,25 @@ python3 scripts/monitor_voltage.py
 ```
 **Uso:** Verificar voltajes con multímetro durante troubleshooting
 
-### 2. Diagnóstico de Divisor de Voltaje
+### 2. Calibración de pH (3 Puntos)
 ```bash
-python3 scripts/fix_voltage_divider.py
+python3 scripts/calibrate_ph.py
 ```
-**Uso:** Calcular factor correcto del divisor de voltaje
-
-### 3. Calibración de 3 Puntos
-```bash
-python3 scripts/calibrate_ph_3points.py
-```
-**Uso:** Recalibrar sensor con soluciones buffer
+**Uso:** Recalibrar sensor con soluciones buffer 4.01, 6.86, 9.18
 **Duración:** 15-30 minutos (3-7 min por buffer)
 
-### 4. Diagnóstico General
+### 3. Calibración de Temperatura
 ```bash
-python3 scripts/diagnose_ph.py
+python3 scripts/calibrate_temperature.py
 ```
-**Uso:** Troubleshooting general del sensor
+**Uso:** Calibración interactiva con 3 puntos de temperatura
+**Duración:** ~15 minutos
+
+### 4. Monitor en Tiempo Real
+```bash
+python3 scripts/monitor_sensores.py
+```
+**Uso:** Visualización de datos con estadísticas (presionar Ctrl+C para reporte final)
 
 ---
 

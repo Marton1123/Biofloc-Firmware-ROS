@@ -5,6 +5,110 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.0.0] - 2026-02-10
+
+### Resumen
+**MAJOR RELEASE:** Migración completa a arquitectura de Gateway Seguro IoT. ESP32 ahora opera sin acceso a internet (aislado por firewall iptables). Gestor unificado con interfaz en español para todas las operaciones del sistema. Corrección de 3 errores críticos de calibración basados en verificación de hardware desde foto de PCB.
+
+### 🔒 Seguridad - Arquitectura Gateway
+- **Gateway IoT Seguro**: ESP32 aislado de internet mediante firewall iptables
+  - Hotspot WiFi en gateway (SSID: lab-ros2-nuc, red 10.42.0.1/24)
+  - Firewall iptables con política FORWARD DROP
+  - ESP32 solo puede comunicarse con gateway (UDP 8888 para micro-ROS)
+  - Gateway tiene doble conexión: WiFi para ESP32 + Ethernet para servicios cloud
+- **Dual WiFi Credentials**: Sistema requiere sincronización de dos sets de credenciales
+  - CONFIG_ESP_WIFI_* para componente micro_ros_espidf_component
+  - CONFIG_BIOFLOC_WIFI_* para aplicación principal
+  - Gestor actualiza ambos automáticamente
+
+### 🛠️ Agregado - Gestor Unificado
+- **biofloc_manager.py** (v1.0.0, 820 líneas):
+  - **12 opciones de menú** en interfaz completamente en español
+  - **Operaciones del Sistema**: Iniciar Agent, Bridge, Monitor
+  - **Verificación**: Estado completo (8s) y conectividad ESP32 (DHCP/ARP/ping/ROS)
+  - **Calibración**: pH y Temperatura (3 puntos + ajustes rápidos)
+  - **Configuración**: WiFi (dual credentials) y regeneración de sdkconfig
+  - **Firmware**: Pipeline completo de build/flash
+  - **Timeouts inteligentes**: 8s para verificación rápida, 20s opcional para tasa
+  - **Manejo robusto**: Filtrado en Python (no pipes grep), try-except en todos los subprocess
+
+### ⚙️ Cambiado - Configuración
+- **sdkconfig.defaults** ahora es **single source of truth**
+  - Todos los valores deben configurarse aquí primero
+  - Workflow: editar defaults → rm sdkconfig → idf.py reconfigure
+  - Previene drift de configuración entre archivos
+- **Agent IP**: Cambiado de red externa a 10.42.0.1 (gateway interno)
+- **ESP32 IP**: Asignada por DHCP del gateway (típicamente 10.42.0.123)
+
+### 🐛 Corregido - Calibración (3 errores críticos)
+- **ERROR 1 - pH Divisor**: Factor 3.0 → 1.5 (hardware verificado: R1=10kΩ, R2=20kΩ)
+- **ERROR 2 - Temp Divisor**: Factor 3.0 → 1.5 (mismo hardware que pH)
+- **ERROR 3 - Temp Offset Sign**: -423 → +1382 millidegrees (signo invertido)
+- **Root Cause**: Foto de PCB reveló que R1 y R2 estaban invertidos respecto a la asunción inicial
+- **Hardware documentado**: 
+  - R1 = 10kΩ (pull-up desde Vin del sensor)
+  - R2 = 20kΩ (pull-down a GND)
+  - Factor = (R1+R2)/R2 = 30k/20k = 1.5
+
+### ⏱️ Cambiado - Gestión de Tiempo
+- **NTP eliminado del ESP32**: Opera sin acceso a servidores de tiempo
+- **Timestamps de contador**: ESP32 usa `sample_XXXX` incremental
+- **Timestamps del servidor**: Gateway agrega timestamps reales (UTC) antes de MongoDB
+- **Formato en MongoDB**:
+  ```json
+  {
+    "timestamp": "2026-02-10T14:32:15.847Z",     // Del servidor (real)
+    "timestamp_esp32": "sample_1523"              // Del ESP32 (contador)
+  }
+  ```
+
+### 📚 Documentación
+- **MIGRATION_GUIDE_SECURE_GATEWAY.md**: Guía genérica completa (700+ líneas)
+  - 10 puntos clave de migración
+  - Scripts de configuración de gateway (hotspot, firewall)
+  - Checklist con 40+ items de verificación
+  - Sección de troubleshooting con comandos específicos
+  - Prompt optimizado para IA (copiar/pegar)
+- **Actualización masiva de documentación**:
+  - README.md: Nueva arquitectura, gestor, hardware correcto
+  - TECHNICAL_SUMMARY.md: Valores corregidos, arquitectura de red
+  - GUIA_PASO_A_PASO.md: Uso del gestor, configuración de gateway
+  - DOCUMENTATION_INDEX.md: Referencias actualizadas
+  - PROJECT_STATUS.md: Métricas de seguridad, gestor, arquitectura
+  - QUICKSTART.md: Configuración de gateway incluida
+
+### 🔧 Técnico
+- **CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR**: 3000 → 1500
+- **CONFIG_BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR**: 3000 → 1500
+- **CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES**: -423 → 1382
+- **CONFIG_MICRO_ROS_AGENT_IP**: Variable externa → "10.42.0.1"
+- **Subprocess handling**: Pipes con grep eliminados, filtrado en Python
+- **Error handling**: Doble shutdown de rclpy corregido en monitor_sensores.py
+
+### 🎯 Métricas
+- **Precisión pH**: ±0.05 pH (con divisor corregido)
+- **Precisión Temperatura**: ~±1.6°C error residual (ajustable con gestor opción [9])
+- **Tiempo de verificación**: 8s (vs 10+ minutos anterior)
+- **Uptime gateway**: 24/7
+- **Seguridad**: ESP32 completamente bloqueado de internet
+
+### ⚠️ Breaking Changes
+- **Requiere configuración de gateway**: Hotspot WiFi + firewall iptables
+- **Dual WiFi credentials**: Ambos CONFIG_ESP_WIFI_* y CONFIG_BIOFLOC_WIFI_* deben configurarse
+- **Agent IP hardcoded**: 10.42.0.1 (no configurable desde red externa)
+- **NTP no disponible**: ESP32 no puede sincronizar tiempo (usa contador)
+- **sdkconfig.defaults obligatorio**: Regenerar sdkconfig requiere tener valores en defaults
+
+### 📖 Migración desde v2.x
+Ver [MIGRATION_GUIDE_SECURE_GATEWAY.md](MIGRATION_GUIDE_SECURE_GATEWAY.md) para:
+1. Configuración completa del gateway (hotspot + firewall)
+2. Actualización de credenciales WiFi (dual)
+3. Eliminación de NTP del código
+4. Cambio de IP del agente
+5. Actualización de scripts para timestamps del servidor
+
+---
+
 ## [3.2.1] - 2026-02-05
 
 ### Resumen

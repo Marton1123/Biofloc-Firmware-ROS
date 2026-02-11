@@ -364,8 +364,10 @@ python3 scripts/calibrate_ph_3points.py
 
 ## 🆘 Soporte
 
-**Documentación:** README.md, docs/CALIBRATION.md  
+**Documentación:** README.md, docs/guides/CALIBRATION.md  
 **Issues:** GitHub Issues  
+**Autor:** [@Marton1123](https://github.com/Marton1123)  
+**Repositorio:** [Biofloc-Firmware-ROS](https://github.com/Marton1123/Biofloc-Firmware-ROS)  
 **Licencia:** MIT  
 
 ---

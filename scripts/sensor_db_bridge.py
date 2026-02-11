@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-Biofloc Sensor DB Bridge - ROS 2 to MongoDB Bridge
+Biofloc Sensor DB Bridge - ROS 2 to MongoDB Bridge (Secure Gateway Architecture)
 
 Subscribes to /biofloc/sensor_data (JSON) and stores in MongoDB Atlas.
-Uses two-collection architecture for scalability and efficient indexing.
+Operates in a secure IoT gateway where ESP32 devices have no Internet access.
+This node adds server-side timestamps to compensate for ESP32's lack of NTP.
 
 Architecture:
+    - Gateway (NUC): WiFi Hotspot (10.42.0.1) without Internet
+    - ESP32: Connects to hotspot, publishes to micro-ROS Agent
+    - Bridge (this node): Adds timestamps, stores in MongoDB Atlas
+    
+Two-collection architecture:
     - telemetria: time-series sensor readings with indexed queries
     - devices: device metadata, state, and connection history
 
@@ -163,17 +169,20 @@ class SensorDBBridge(Node):
             return False
     
     def sensor_callback(self, msg: String):
-        """Process incoming JSON sensor messages."""
+        """Process incoming JSON sensor messages and add server timestamp."""
         self.messages_received += 1
         
         try:
             # Parse JSON from String message
             data = json.loads(msg.data)
             
+            # SERVER-SIDE TIMESTAMP (ESP32 has no Internet/NTP)
+            server_timestamp = datetime.now().isoformat()
+            
             # Extract device information
             device_id = data.get('device_id', 'biofloc_esp32')
             location = data.get('location', 'lab')
-            timestamp = data.get('timestamp', datetime.now().isoformat())
+            esp32_sample_id = data.get('timestamp', 'unknown')  # Sample counter from ESP32
             
             # Extract sensor values
             sensors = data.get('sensors', {})
@@ -191,7 +200,8 @@ class SensorDBBridge(Node):
             telemetria_doc = {
                 'device_id': device_id,
                 'location': location,
-                'timestamp': timestamp,
+                'timestamp': server_timestamp,  # SERVER TIMESTAMP
+                'esp32_sample_id': esp32_sample_id,  # ESP32 counter for debugging
                 'sensors': {
                     'temperature': {
                         'value': round(temperature, 2),
@@ -223,34 +233,49 @@ class SensorDBBridge(Node):
                         self.messages_saved += 1
                         
                         # 2. Update/create device in devices collection
-                        self._update_device_metadata(device_id, location, timestamp)
+                        self._update_device_metadata(device_id, location, server_timestamp)
                         
                         self.get_logger().debug(
                             f"Saved: {device_id} | pH: {ph:.2f} | Temp: {temperature:.2f}°C"
                         )
                     else:
                         self.messages_failed += 1
-                        self.get_logger().warning("Failed to save document")
+                        self.get_logger().warning("Failed to save document to MongoDB")
                         
                 except Exception as e:
                     self.get_logger().error(f"MongoDB insert error: {e}")
                     self.messages_failed += 1
+                    self.mongodb_connected = False  # Mark as disconnected
                     
-                    # Try to reconnect
-                    if not self.mongodb_connected and PYMONGO_AVAILABLE:
-                        self.get_logger().warning("Attempting MongoDB reconnection...")
-                        self._connect_mongodb()
+                    # Try to reconnect on next message
+                    self.get_logger().warning("Will attempt reconnection on next message")
             else:
-                # Not connected to MongoDB
-                if PYMONGO_AVAILABLE and not self.mongodb_connected:
+                # Not connected to MongoDB - try reconnecting
+                if PYMONGO_AVAILABLE:
                     self.get_logger().debug("MongoDB disconnected, attempting reconnection...")
-                    self._connect_mongodb()
-                    
+                    reconnected = self._connect_mongodb()
+                    if reconnected:
+                        self.get_logger().info("✅ MongoDB reconnection successful")
+                        # Retry saving this message
+                        try:
+                            result = self.telemetria_collection.insert_one(telemetria_doc)
+                            if result.inserted_id:
+                                self.messages_saved += 1
+                                self._update_device_metadata(device_id, location, server_timestamp)
+                        except Exception as e:
+                            self.get_logger().error(f"Failed to save after reconnect: {e}")
+                            self.messages_failed += 1
+                    else:
+                        self.messages_failed += 1
+                        
         except json.JSONDecodeError as e:
-            self.get_logger().error(f"JSON parse error: {e}")
+            self.get_logger().error(f"JSON parse error: {e} | Raw data: {msg.data[:100]}")
+            self.messages_failed += 1
+        except KeyError as e:
+            self.get_logger().error(f"Missing key in JSON: {e}")
             self.messages_failed += 1
         except Exception as e:
-            self.get_logger().error(f"Error processing message: {e}")
+            self.get_logger().error(f"Unexpected error processing message: {type(e).__name__}: {e}")
             self.messages_failed += 1
     
     def _update_device_metadata(self, device_id: str, location: str, timestamp: str):

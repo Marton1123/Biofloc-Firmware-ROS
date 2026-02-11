@@ -2,14 +2,19 @@
 """Quick script to check MongoDB data"""
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from datetime import datetime
 
-# Load environment
-script_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(script_dir, '.env')
-load_dotenv(dotenv_path)
+# Load environment from project root
+project_root = Path(__file__).parent.parent
+env_file = project_root / '.env'
+if env_file.exists():
+    load_dotenv(env_file)
+else:
+    # Fallback to scripts/.env for backward compatibility
+    load_dotenv(Path(__file__).parent / '.env')
 
 # Connect to MongoDB
 uri = os.getenv('MONGODB_URI')

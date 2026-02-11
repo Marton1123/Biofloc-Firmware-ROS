@@ -9,11 +9,15 @@ CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE=y
 CONFIG_MICRO_ROS_APP_STACK=16000
 CONFIG_MICRO_ROS_APP_TASK_PRIO=5
 
-# ---- Configuración de Agent (se puede sobrescribir en menuconfig) ----
-CONFIG_MICRO_ROS_AGENT_IP="192.168.1.100"
+# ---- Configuración de Agent - Gateway Seguro ----
+CONFIG_MICRO_ROS_AGENT_IP="10.42.0.1"
 CONFIG_MICRO_ROS_AGENT_PORT=8888
 
-# ---- WiFi ----
+# ---- WiFi - Gateway Seguro (lab-ros2-nuc) ----
+# IMPORTANTE: micro_ros component usa CONFIG_ESP_WIFI_*, NO CONFIG_BIOFLOC_WIFI_*
+CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
+CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_MAXIMUM_RETRY=15
 CONFIG_ESP_WIFI_SCAN_RSSI_THRESHOLD=-127
 
 # ---- Partición de flash ----
@@ -38,8 +42,14 @@ CONFIG_LWIP_SO_RCVBUF=y
 CONFIG_FREERTOS_HZ=1000
 
 # ---- Temperature Sensor Calibration ----
-# Calibrado 2026-01-29 con TP101 (3 puntos, R²=0.999999)
-# Ecuación: T_calibrada = 1.086092 × T_raw - 0.423°C
-CONFIG_BIOFLOC_TEMP_SLOPE=1086092
-CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES=-423
+# Calibrado 2026-01-29 con TP101
+# Solo se usa offset de +1.382°C (slope=1.0, sin ajuste de pendiente)
+# Hardware: Divisor R1=10kΩ, R2=20kΩ → factor 1.5
+CONFIG_BIOFLOC_TEMP_SLOPE=1000000
+CONFIG_BIOFLOC_TEMP_OFFSET_MILLIDEGREES=1382
+CONFIG_BIOFLOC_TEMP_VOLTAGE_DIVIDER_FACTOR=1500
+
+# ---- pH Sensor Configuration ----
+# Hardware: Divisor R1=10kΩ, R2=20kΩ → factor 1.5
+CONFIG_BIOFLOC_PH_VOLTAGE_DIVIDER_FACTOR=1500
 

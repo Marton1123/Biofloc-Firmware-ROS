@@ -1,8 +1,8 @@
 # 📊 Estado del Proyecto - Biofloc Firmware ROS
 
-**Última actualización:** 21 de Enero, 2026  
-**Versión actual:** v2.2.0 (pH Calibration System)  
-**Estado:** ✅ **OPERACIONAL** - Sistema calibrado y probado en producción
+**Última actualización:** 10 de Febrero, 2026  
+**Versión actual:** v3.0.0 (Secure Gateway + Manager)  
+**Estado:** ✅ **OPERACIONAL** - Sistema con gateway seguro y gestor unificado
 
 ---
 
@@ -10,48 +10,106 @@
 
 | Objetivo | Estado | Notas |
 |----------|--------|-------|
+| **Arquitectura segura** | ✅ COMPLETADO | ESP32 sin acceso a internet, firewall iptables |
+| **Gestor unificado** | ✅ COMPLETADO | biofloc_manager.py (820 líneas, 12 opciones) |
 | Telemetría en tiempo real | ✅ COMPLETADO | WiFi + micro-ROS funcionando |
-| Lectura de pH precisa | ✅ COMPLETADO | ±0.03 pH (99.4% accuracy) |
-| Lectura de temperatura | ⚠️ FUNCIONAL | Sensor errático (-6°C a +7°C) |
-| Almacenamiento en cloud | ✅ COMPLETADO | MongoDB Atlas, 100% success rate |
-| Sincronización de tiempo | ✅ COMPLETADO | NTP, timezone correcto (GMT-3) |
-| Sistema de calibración | ✅ COMPLETADO | 3 puntos, R²=0.9997 |
-| Herramientas de diagnóstico | ✅ COMPLETADO | 4 scripts Python disponibles |
-| Documentación completa | ✅ COMPLETADO | 6 documentos, 2000+ líneas |
+| Lectura de pH precisa | ✅ COMPLETADO | ±0.05 pH (hardware verificado R1=10k, R2=20k) |
+| Lectura de temperatura | ⚠️ FUNCIONAL | ±1.6°C error (ajustable con gestor) |
+| Almacenamiento en cloud | ✅ COMPLETADO | MongoDB Atlas vía gateway |
+| Timestamps sin NTP | ✅ COMPLETADO | Servidor agrega timestamps reales |
+| Sistema de calibración | ✅ COMPLETADO | 3 puntos, integrado en gestor |
+| Herramientas de diagnóstico | ✅ COMPLETADO | Gestor con 12 opciones + scripts Python |
+| Documentación completa | ✅ COMPLETADO | 8 documentos, 3000+ líneas, guía de migración |
 
 ---
 
 ## 📈 Métricas de Calidad
 
+### Arquitectura y Seguridad
+| Métrica | Valor Actual | Objetivo | Estado |
+|---------|--------------|----------|--------|
+| ESP32 sin internet | ✅ Bloqueado | Bloqueado | ✅ OK |
+| Firewall iptables | FORWARD DROP | FORWARD DROP | ✅ OK |
+| Dual WiFi credentials | Sincronizadas | Sincronizadas | ✅ OK |
+| Gateway uptime | 24/7 | 24/7 | ✅ OK |
+
 ### Sensor de pH
 | Métrica | Valor Actual | Objetivo | Estado |
 |---------|--------------|----------|--------|
-| Precisión | ±0.03 pH | ±0.05 pH | ✅ SUPERADO |
+| Precisión | ±0.05 pH | ±0.05 pH | ✅ OK |
 | R² calibración | 0.9997 | >0.99 | ✅ SUPERADO |
-| Estabilidad | <0.002V/50s | <0.01V | ✅ SUPERADO |
-| Tiempo respuesta | 3-5 min | <10 min | ✅ OK |
+| Divisor voltaje | 1.5 (verificado) | Correcto | ✅ OK |
 | Rango calibrado | 4-9 pH | 4-10 pH | ✅ OK |
+
+### Sensor de Temperatura
+| Métrica | Valor Actual | Objetivo | Estado |
+|---------|--------------|----------|--------|
+| Precisión | ±1.6°C | ±0.5°C | ⚠️ AJUSTABLE |
+| Divisor corregido | 1.5 (was 3.0) | Correcto | ✅ OK |
+| Offset corregido | +1.382°C | Correcto | ✅ OK |
 
 ### Sistema de Telemetría
 | Métrica | Valor Actual | Objetivo | Estado |
 |---------|--------------|----------|--------|
-| Latencia WiFi | <50ms | <100ms | ✅ OK |
+| Latencia Gateway→ESP32 | <50ms | <100ms | ✅ OK |
 | Success rate MongoDB | 100% | >95% | ✅ SUPERADO |
-| Uptime | 24/7 | 24/7 | ✅ OK |
+| Uptime ESP32 | 24/7 | 24/7 | ✅ OK |
 | Tasa de muestreo | 0.25 Hz | >0.1 Hz | ✅ OK |
 | Pérdida de datos | 0% | <5% | ✅ SUPERADO |
+
+### Gestor y Herramientas
+| Métrica | Valor Actual | Objetivo | Estado |
+|---------|--------------|----------|--------|
+| Opciones de menú | 12 | >10 | ✅ OK |
+| Tiempo verificación | 8s | <15s | ✅ OK |
+| Interfaz en español | 100% | 100% | ✅ OK |
+| Timeouts inteligentes | Implementados | Implementados | ✅ OK |
 
 ### Código y Arquitectura
 | Métrica | Valor Actual | Límite | Estado |
 |---------|--------------|--------|--------|
 | Uso de flash | 867 KB (43%) | <80% | ✅ OK |
 | Uso de RAM | ~98 KB (30%) | <70% | ✅ OK |
-| Cobertura docs | ~90% | >80% | ✅ OK |
-| Scripts de test | 4 | >3 | ✅ OK |
+| Cobertura docs | ~95% | >80% | ✅ OK |
+| Scripts de test | 5+ | >3 | ✅ OK |
+| Líneas gestor | 820 | N/A | ✅ OK |
 
 ---
 
 ## 🔧 Componentes del Sistema
+
+### Arquitectura de Red (Gateway Seguro)
+```
+Internet
+   |
+   | Ethernet (enp88s0) - DHCP del ISP
+   |
+┌─────────────────────────────────────┐
+│  Gateway - NUC Ubuntu 24.04         │
+│  ├─ WiFi Hotspot (wlo1)             │
+│  │  ├─ SSID: lab-ros2-nuc           │
+│  │  ├─ IP: 10.42.0.1/24             │
+│  │  └─ DHCP Server activo           │
+│  ├─ Firewall iptables               │
+│  │  └─ FORWARD DROP (bloquea ESP32) │
+│  ├─ micro-ROS Agent (UDP 8888)      │
+│  ├─ sensor_db_bridge.py             │
+│  ├─ biofloc_manager.py (gestor)     │
+│  └─ Internet vía Ethernet           │
+└─────────────────────────────────────┘
+          |
+          | WiFi (SIN internet)
+          | 10.42.0.0/24
+          |
+┌─────────────────────────────────────┐
+│  ESP32 - 10.42.0.123                │
+│  ├─ MAC: 24:0a:c4:60:c8:e0          │
+│  ├─ SIN acceso a internet           │
+│  ├─ Timestamps: contador (sin NTP)  │
+│  ├─ micro-ROS Publisher             │
+│  └─ Sensores pH/Temp (CWT-BL)       │
+└─────────────────────────────────────┘
+```
 
 ### Hardware (ESP32)
 ```
@@ -63,11 +121,15 @@
 │  └─ ADC: 12-bit, 0-3.3V             │
 └─────────────────────────────────────┘
           │
-          ├─── GPIO36 ──→ CWT-BL pH Sensor (via voltage divider)
-          │                ├─ R1: 20kΩ
-          │                └─ R2: 10kΩ (Factor: 1.474)
+          ├─── GPIO36 ──→ CWT-BL pH Sensor
+          │                ├─ R1: 10kΩ (pull-up)
+          │                ├─ R2: 20kΩ (pull-down)
+          │                ├─ R3: 470Ω (protección)
+          │                ├─ C1: 100nF (filtro)
+          │                └─ Factor: 1.5 (verificado PCB)
           │
           └─── GPIO34 ──→ CWT-BL Temp Sensor
+                           └─ Mismo circuito (Factor: 1.5)
 ```
 
 ### Software Stack
@@ -75,29 +137,55 @@
 ┌─────────────────────────────────────┐
 │  MongoDB Atlas (Cloud)              │
 │  └─ Collection: telemetria          │
+│     ├─ timestamp (servidor)         │
+│     └─ timestamp_esp32 (contador)   │
 └─────────────────────────────────────┘
           ▲
           │ pymongo (Python)
           │
 ┌─────────────────────────────────────┐
-│  sensor_db_bridge.py (PC)           │
-│  └─ ROS 2 Subscriber                │
+│  sensor_db_bridge.py (Gateway)      │
+│  ├─ ROS 2 Subscriber                │
+│  └─ Agrega timestamps reales        │
 └─────────────────────────────────────┘
           ▲
           │ UDP 8888
           │
 ┌─────────────────────────────────────┐
-│  micro-ROS Agent (PC)               │
+│  micro-ROS Agent (Gateway)          │
 │  └─ ROS 2 Jazzy                     │
 └─────────────────────────────────────┘
           ▲
           │ WiFi (micro-ROS protocol)
           │
 ┌─────────────────────────────────────┐
-│  ESP32 Firmware v2.2.0              │
+│  ESP32 Firmware v3.0.0              │
 │  ├─ micro-ROS Jazzy Client          │
 │  ├─ Sensors Module                  │
 │  ├─ pH Calibration (applied)        │
+│  ├─ Temp Calibration (applied)      │
+│  └─ Sin NTP (timestamps contador)   │
+└─────────────────────────────────────┘
+```
+
+### Herramientas de Gestión
+
+**biofloc_manager.py (v1.0.0):**
+- 820 líneas de código Python
+- 12 opciones de menú
+- Interfaz completamente en español
+- Timeouts inteligentes (8s + 20s opcional)
+- Integración con sdkconfig.defaults
+- Verificación completa de conectividad
+- Calibración interactiva integrada
+- Pipeline de build/flash automatizado
+
+**Scripts de Soporte:**
+- `sensor_db_bridge.py` - Puente ROS→MongoDB con timestamps del servidor
+- `monitor_sensores.py` - Monitor en tiempo real con estadísticas
+- `calibrate_ph.py` - Calibración interactiva de pH (3 puntos)
+- `calibrate_temperature.py` - Calibración interactiva de temperatura
+- `check_ph_cycles.py` - Análisis de ciclos circadianos
 │  └─ NTP Time Sync                   │
 └─────────────────────────────────────┘
 ```

@@ -70,8 +70,14 @@ ANALYSIS_END = datetime(2026, 2, 2, 0, 0, 0)  # Antes del mantenimiento del 02-0
 # CONEXIÓN A MONGODB ATLAS
 # ============================================================================
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno desde raíz del proyecto
+from pathlib import Path
+project_root = Path(__file__).parent.parent
+env_file = project_root / '.env'
+if env_file.exists():
+    load_dotenv(env_file)
+else:
+    load_dotenv()  # Fallback
 
 # Conectar a MongoDB Atlas
 client = pymongo.MongoClient(os.getenv("MONGODB_URI"))

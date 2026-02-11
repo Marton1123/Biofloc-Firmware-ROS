@@ -2,48 +2,186 @@
 
 Sistema completo de telemetría IoT para acuicultura con **micro-ROS Jazzy**, **ESP-IDF v5.3** y **MongoDB Atlas**.
 
-**Versión:** 3.1.0 (Calibración de Temperatura con Regresión Lineal)
+**Versión:** 3.0.0 (Secure Gateway + Manager)  
+**Bridge:** 3.1.0 (Server-side Timestamps)  
+**Manager:** 1.0.0 (Unified Management Tool)
+
+---
+
+## 🔒 Arquitectura de Gateway Seguro
+
+Sistema IoT con **seguridad mejorada** donde los ESP32 **NO tienen acceso a Internet**:
+
+```
+Internet
+   |
+   | (Ethernet - enp88s0)
+   |
+[GATEWAY - NUC Ubuntu 24.04]
+   | - WiFi Hotspot (wlo1) - 10.42.0.1/24
+   | - Firewall iptables (FORWARD DROP)
+   | - micro-ROS Agent (UDP 8888)
+   | - Scripts Python (Bridge, Monitor)
+   | - biofloc_manager.py (Gestor Unificado)
+   |
+   | (WiFi - sin internet)
+   | SSID: lab-ros2-nuc
+   | Red: 10.42.0.0/24
+   |
+[ESP32 - 10.42.0.123]
+   | - SIN acceso a internet (bloqueado por firewall)
+   | - Solo UDP a 10.42.0.1:8888
+   | - Timestamps basados en contador (sin NTP)
+   | - micro-ROS Publisher
+   |
+   ↓ Datos enviados al Gateway
+   ↓ Gateway agrega timestamps reales
+   ↓ Bridge guarda a MongoDB Atlas
+```
+
+**Ver:**  
+- [MIGRATION_GUIDE_SECURE_GATEWAY.md](MIGRATION_GUIDE_SECURE_GATEWAY.md) - Guía genérica de migración  
+- [biofloc_manager.py](biofloc_manager.py) - Gestor unificado del sistema (CLI español, 12 opciones)
 
 ---
 
 ## Inicio Rápido
 
-**[GUÍA PASO A PASO](GUIA_PASO_A_PASO.md)** - Instrucciones completas de ejecución
+**[GUÍA PASO A PASO](GUIA_PASO_A_PASO.md)** - Instrucciones completas de ejecución  
+**[MIGRACIÓN A GATEWAY SEGURO](SECURE_GATEWAY_MIGRATION.md)** - Nueva arquitectura de red
 
 ---
 
 ## Características
 
-- Monitoreo en tiempo real de pH y temperatura
-- Telemetría vía micro-ROS sobre WiFi UDP
-- Almacenamiento automático en MongoDB Atlas con indexación optimizada
-- **Calibración de pH de 3 puntos** (precisión <0.05 pH, R²=0.9997)
-- **Calibración de temperatura con slope+offset** (precisión ≤0.03°C, R²=0.999999)
-- Reconexión automática WiFi y Agent
-- Publicación JSON estructurada
-- Auto-registro de nuevos dispositivos
-- Arquitectura de 2 colecciones para escalabilidad
-- Herramientas de diagnóstico y calibración
-- **[test_led_project](test_led_project/)** - Proyecto de ejemplo para control de LED por teclado via micro-ROS
+### 🔒 Seguridad
+- **Gateway IoT Seguro** - ESP32 aislado de internet mediante firewall iptables
+- **Doble red** - WiFi para ESP32 (sin internet) + Ethernet para servicios cloud
+- **Firewall iptables** - FORWARD DROP bloquea ESP32→Internet, solo permite UDP 8888
+
+### ⏱️ Gestión de Tiempo
+- **Sin NTP en ESP32** - Opera sin acceso a servidores de tiempo
+- **Timestamps del servidor** - Gateway agrega timestamps reales (UTC)
+- **Timestamps de contador** - ESP32 usa contador incremental para correlación
+
+### 🛠️ Gestor Unificado (biofloc_manager.py)
+- **CLI en español** - Interfaz completamente traducida
+- **12 opciones de menú** - Sistema, verificación, calibración, configuración, firmware
+- **Timeouts inteligentes** - 8s para verificación rápida, 20s opcional para tasa
+- **Diagnóstico completo** - Estado ESP32, conectividad, DHCP, ARP, ROS topics
+- **Calibración integrada** - pH y temperatura (3 puntos + ajustes rápidos)
+- **Gestión WiFi** - Actualiza dual credentials (ESP_WIFI + BIOFLOC_WIFI)
+- **Build/Flash** - Pipeline completo de firmware desde el gestor
+
+### 📊 Monitoreo y Telemetría
+- 📡 **micro-ROS sobre WiFi UDP** - Comunicación ESP32↔Gateway
+- 💾 **MongoDB Atlas** - Almacenamiento cloud con manejo robusto de errores
+- 🔄 **Reconexión robusta** - Backoff exponencial (hasta 15 intentos)
+- 📈 **Publicación cada 4s** - Datos de pH y temperatura en tiempo real
+
+### 🎯 Calibración de Sensores
+- **pH: 3 puntos** (4.01, 6.86, 9.18) - Precisión <0.05 pH, R²=0.9997
+- **Temperatura: Slope+Offset** - Precisión ≤0.1°C
+- **Hardware verificado** - R1=10kΩ, R2=20kΩ (factor 1.5 documentado desde PCB)
+- **Scripts automáticos** - Calibración interactiva con actualización de sdkconfig
+
+### 🏗️ Arquitectura
+- 📱 Auto-registro de dispositivos por MAC
+- 🔗 Formato JSON estructurado
+- 🏗️ Arquitectura de 2 colecciones MongoDB
+- 📝 Configuración centralizada en sdkconfig.defaults
+- 🔌 **[test_led_project](test_led_project/)** - Ejemplo de control por teclado via micro-ROS
 
 ## 📋 Requisitos
 
 ### Hardware
-- ESP32 (240MHz, Dual Core, WiFi)
-- Sensor CWT-BL pH/Temperature Transmitter (0-5V output)
-- Voltage divider: R1=20kΩ, R2=10kΩ
-- Soluciones buffer pH 4.01, 6.86, 9.18 (para calibración)
+- **ESP32** (240MHz, Dual Core, WiFi 2.4GHz) - MAC: 24:0a:c4:60:c8:e0
+- **Gateway** Intel NUC o PC Linux (Ubuntu 24.04+, WiFi + Ethernet)
+- **Sensor** CWT-BL pH/Temperature Transmitter (0-5V output, 24V powered)
+- **Voltage Divider** (AMBOS sensores):
+  - R1 = 10kΩ (pull-up, conectado a Vin del sensor)
+  - R2 = 20kΩ (pull-down a GND)
+  - R3 = 470Ω (protección)
+  - C1 = 100nF (filtro)
+  - **Factor = 1.5** (30k/20k)
+- **Soluciones buffer** pH 4.01, 6.86, 9.18 (para calibración de 3 puntos)
+- **Termómetro de referencia** (para calibración de temperatura)
 
 ### Software
-- ESP-IDF v5.3.4+ instalado y configurado
-- ROS 2 Jazzy Desktop
-- Python 3.12+ con pymongo, python-dotenv, numpy
-- micro-ROS Agent
-- MongoDB Atlas account (opcional)
+- **ESP-IDF** v5.3.4+ instalado y configurado
+- **ROS 2 Jazzy Desktop** (en Gateway)
+- **Python 3.12+** con pymongo, python-dotenv, numpy (en Gateway)
+- **micro-ROS Agent** (compilado localmente en Gateway)
+- **MongoDB Atlas** account con credenciales en `.env`
+- **NetworkManager** para gestión de hotspot WiFi
+- **iptables** para firewall (incluido en Ubuntu)
 
 ## 🚀 Quick Start
 
-### 1. Configurar el entorno ESP-IDF
+### Opción 1: Usando el Gestor Unificado (Recomendado)
+
+```bash
+# Ejecutar gestor interactivo (CLI en español)
+cd /home/Biofloc-Firmware-ROS
+python3 biofloc_manager.py
+```
+
+**Menú del gestor (12 opciones):**
+1. ▶️ Iniciar micro-ROS Agent
+2. ▶️ Iniciar sensor_db_bridge.py
+3. 📊 Iniciar monitor_sensores.py
+4. ✅ Verificar estado del sistema
+5. 🔌 Verificar conectividad ESP32
+6. 🧪 Calibración completa pH
+7. 🌡️ Calibración completa Temperatura
+8. ⚡ Ajuste rápido pH
+9. ⚡ Ajuste rápido Temperatura
+10. 📶 Configurar WiFi
+11. ⚙️ Regenerar sdkconfig
+12. 🛠️ Compilar y Flashear
+
+---
+
+### Opción 2: Configuración Manual (Primera Vez)
+
+### 1. Configurar Gateway WiFi Hotspot
+
+```bash
+# Crear hotspot en interfaz WiFi del gateway
+nmcli device wifi hotspot \
+  ifname wlo1 \
+  ssid "lab-ros2-nuc" \
+  password "ni2dEUVd"
+
+# Configurar autoconexión
+nmcli connection modify Hotspot connection.autoconnect yes
+
+# Verificar red creada (debe mostrar 10.42.0.1/24)
+ip addr show wlo1
+```
+
+**Ver:** [MIGRATION_GUIDE_SECURE_GATEWAY.md](MIGRATION_GUIDE_SECURE_GATEWAY.md#11-crear-hotspot-wifi-networkmanager) para más detalles.
+
+### 2. Configurar Firewall iptables
+
+```bash
+# Copiar script de firewall a home
+cp MIGRATION_GUIDE_SECURE_GATEWAY.md ~/setup_iot_firewall.sh
+# (Extraer sección del script del .md)
+
+# Hacer ejecutable y correr
+chmod +x ~/setup_iot_firewall.sh
+sudo ~/setup_iot_firewall.sh
+
+# Hacer persistente
+sudo apt install iptables-persistent
+sudo netfilter-persistent save
+
+# Verificar (debe mostrar FORWARD policy DROP)
+sudo iptables -L FORWARD -v -n
+```
+
+### 3. Configurar el entorno ESP-IDF
 
 ```bash
 . $HOME/esp/esp-idf/export.sh
@@ -57,26 +195,113 @@ cd /home/Biofloc-Firmware-ROS
 idf.py set-target esp32  # o esp32s3, esp32c3, etc.
 ```
 
-### 3. Configurar WiFi y Agent
+### 3. Configurar WiFi y Agent (sdkconfig.defaults)
+
+Editar `sdkconfig.defaults` para configurar **ambos sets de credenciales WiFi**:
 
 ```bash
-idf.py menuconfig
+cd /home/Biofloc-Firmware-ROS
+nano sdkconfig.defaults
 ```
 
-Navegar a: **Biofloc Configuration** →
-- **WiFi Configuration**: SSID y Password
-- **micro-ROS Agent Configuration**: IP y Puerto del Agent
+**Credenciales WiFi (DUAL - micro_ros y aplicación):**
+```ini
+# Credenciales para componente micro_ros_espidf
+CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
+CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_MAXIMUM_RETRY=15
 
-### 4. Compilar
+# Credenciales para aplicación biofloc
+CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"
+CONFIG_BIOFLOC_WIFI_PASSWORD="ni2dEUVd"
+```
+
+**Agent IP (Gateway en red interna):**
+```ini
+CONFIG_MICRO_ROS_AGENT_IP="10.42.0.1"  # IP del gateway
+CONFIG_MICRO_ROS_AGENT_PORT=8888
+```
+
+**⚠️ IMPORTANTE:** Ambos sets de credenciales WiFi deben ser **idénticos**. Si usas `idf.py menuconfig`, actualiza ambos lugares.
+
+**Alternativa:** Usar opción [10] del gestor para actualizar automáticamente.
+
+### 4. Regenerar sdkconfig y Compilar
 
 ```bash
+# Cargar entorno ESP-IDF
+. $HOME/esp/esp-idf/export.sh
+
+# Regenerar sdkconfig desde defaults
+rm sdkconfig
+idf.py reconfigure
+
+# Compilar
 idf.py build
 ```
 
-### 5. Flashear y Monitorear
+**Alternativa:** Usar opción [12] del gestor para compilar y flashear automáticamente.
+
+### 5. Flashear y Verificar
 
 ```bash
-idf.py -p /dev/ttyUSB0 flash monitor
+# Flashear
+idf.py -p /dev/ttyUSB0 flash
+
+# Monitorear (verificar que se conecta a "lab-ros2-nuc" y obtiene IP 10.42.0.x)
+idf.py -p /dev/ttyUSB0 monitor
+```
+
+**Salida esperada:**
+```
+I (3421) WIFI: WiFi connected to lab-ros2-nuc
+I (3425) WIFI: Got IP: 10.42.0.123
+I (3430) MAIN: Connecting to micro-ROS agent at 10.42.0.1:8888
+```
+
+---
+
+## 📊 Uso del Sistema
+
+### Verificar Estado (Gestor - Opción 4)
+
+```bash
+python3 biofloc_manager.py
+# Seleccionar: [4] Verificar estado del sistema
+```
+
+**Verifica:**
+- ✅ micro-ROS Agent corriendo
+- ✅ sensor_db_bridge.py corriendo
+- ✅ Gateway WiFi activo (10.42.0.1)
+- ✅ Topic ROS disponible
+- ✅ ESP32 publicando mensajes (8s timeout)
+- ✅ Tasa de publicación (opcional, 20s)
+
+### Verificar Conectividad ESP32 (Gestor - Opción 5)
+
+```bash
+python3 biofloc_manager.py
+# Seleccionar: [5] Verificar conectividad ESP32
+```
+
+**Verifica:**
+- 📶 DHCP lease (MAC 24:0a:c4:60:c8:e0)
+- 🔗 ARP table (IP 10.42.0.123)
+- 🎯 Ping al ESP32
+- 📡 Comunicación ROS (mensajes y tasa)
+
+### Monitoreo Manual
+
+```bash
+# Terminal 1: Iniciar Agent
+source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash && ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
+
+# Terminal 2: Ver datos
+source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash && ros2 topic echo /biofloc/sensor_data
+
+# Terminal 3: Guardar a MongoDB
+cd /home/Biofloc-Firmware-ROS/scripts && source /opt/ros/jazzy/setup.bash && source ~/microros_ws/install/local_setup.bash && python3 sensor_db_bridge.py
 ```
 
 ## 🎯 Calibración del Sensor de pH

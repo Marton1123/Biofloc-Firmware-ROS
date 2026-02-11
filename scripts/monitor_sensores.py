@@ -367,11 +367,20 @@ def main() -> int:
         rclpy.spin(node)
         return 0
     except KeyboardInterrupt:
+        print("\n\nInterrumpido por usuario")
         node.show_final_report()
         return 0
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except:
+            pass
+        
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except:
+            pass
 
 
 if __name__ == "__main__":
