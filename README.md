@@ -25,7 +25,7 @@ Internet
    | - biofloc_manager.py (Gestor Unificado)
    |
    | (WiFi - sin internet)
-   | SSID: lab-ros2-nuc
+   | SSID: <tu-ssid-gateway>
    | Red: 10.42.0.0/24
    |
 [ESP32 - 10.42.0.123]
@@ -144,14 +144,18 @@ python3 biofloc_manager.py
 
 ### Opción 2: Configuración Manual (Primera Vez)
 
+> **🔒 IMPORTANTE:** Las credenciales WiFi mostradas aquí son ejemplos genéricos.  
+> Reemplaza `<tu-ssid-gateway>` y `<tu-password-seguro>` con tus propias credenciales.  
+> Consulta el archivo `.env` para la configuración real (no está en Git por seguridad).
+
 ### 1. Configurar Gateway WiFi Hotspot
 
 ```bash
 # Crear hotspot en interfaz WiFi del gateway
 nmcli device wifi hotspot \
   ifname wlo1 \
-  ssid "lab-ros2-nuc" \
-  password "ni2dEUVd"
+  ssid "<tu-ssid-gateway>" \
+  password "<tu-password-seguro>"
 
 # Configurar autoconexión
 nmcli connection modify Hotspot connection.autoconnect yes
@@ -207,13 +211,13 @@ nano sdkconfig.defaults
 **Credenciales WiFi (DUAL - micro_ros y aplicación):**
 ```ini
 # Credenciales para componente micro_ros_espidf
-CONFIG_ESP_WIFI_SSID="lab-ros2-nuc"
-CONFIG_ESP_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_ESP_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_ESP_WIFI_PASSWORD="<tu-password-seguro>"
 CONFIG_ESP_MAXIMUM_RETRY=15
 
 # Credenciales para aplicación biofloc
-CONFIG_BIOFLOC_WIFI_SSID="lab-ros2-nuc"
-CONFIG_BIOFLOC_WIFI_PASSWORD="ni2dEUVd"
+CONFIG_BIOFLOC_WIFI_SSID="<tu-ssid-gateway>"
+CONFIG_BIOFLOC_WIFI_PASSWORD="<tu-password-seguro>"
 ```
 
 **Agent IP (Gateway en red interna):**
@@ -248,13 +252,13 @@ idf.py build
 # Flashear
 idf.py -p /dev/ttyUSB0 flash
 
-# Monitorear (verificar que se conecta a "lab-ros2-nuc" y obtiene IP 10.42.0.x)
+# Monitorear (verificar que se conecta a tu SSID y obtiene IP 10.42.0.x)
 idf.py -p /dev/ttyUSB0 monitor
 ```
 
 **Salida esperada:**
 ```
-I (3421) WIFI: WiFi connected to lab-ros2-nuc
+I (3421) WIFI: WiFi connected to <tu-ssid-gateway>
 I (3425) WIFI: Got IP: 10.42.0.123
 I (3430) MAIN: Connecting to micro-ROS agent at 10.42.0.1:8888
 ```
