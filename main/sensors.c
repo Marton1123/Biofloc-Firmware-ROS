@@ -320,8 +320,23 @@ esp_err_t sensors_init(void)
     s_ctx.initialized = true;
     ESP_LOGI(TAG, "Sensor subsystem initialized");
 
-    /* Load calibrations from NVS */
-    sensors_load_calibrations();
+    /* Initialize NVS if not already initialized */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS partition was truncated, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    
+    if (nvs_err == ESP_OK) {
+        ESP_LOGI(TAG, "✓ NVS initialized successfully");
+        
+        /* Load calibrations from NVS */
+        sensors_load_calibrations();
+    } else {
+        ESP_LOGW(TAG, "⚠ NVS initialization failed: %s - calibrations won't persist", 
+                 esp_err_to_name(nvs_err));
+    }
 
     return ESP_OK;
 }

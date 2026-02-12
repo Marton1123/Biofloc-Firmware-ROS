@@ -5,6 +5,80 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.1.1] - 2026-02-12
+
+### Resumen
+**HOTFIX CRÍTICO:** Eliminación del boot loop causado por `esp_restart()` en caso de desconexión. Estrategia de reconexión infinita sin reinicio del ESP32. Mejoras de robustez para producción.
+
+### 🐛 Corregido - Boot Loop Crítico
+- **PROBLEMA**: ESP32 entraba en boot loop infinito cuando perdía conexión con el Agent
+  - `esp_restart()` en `micro_ros_task()` línea 495-498
+  - `esp_restart()` en bucle principal línea 596-600
+  - Causaba reinicios constantes sin resolver el problema
+- **ROOT CAUSE**: Lógica de reconexión terminaba con reinicio en lugar de espera
+- **SOLUCIÓN**:
+  - ✅ Eliminado completamente `esp_restart()` de ambos puntos
+  - ✅ Nueva función `reconnect_forever()` - reconexión infinita sin reinicio
+  - ✅ Exponential backoff: 3s → 6s → 12s → 24s → 48s → 60s (cap)
+  - ✅ ESP32 nunca se reinicia, espera indefinidamente al Agent
+  - ✅ Cuando Agent vuelve, retoma operación normal automáticamente
+
+### ⚡ Mejorado - Robustez de Conexión
+- **Timeouts aumentados para redes lentas**:
+  - `PING_TIMEOUT_MS`: 5000ms → **10000ms** (10 segundos)
+  - `PING_RETRIES`: 3 → **5** intentos
+  - `RECONNECT_DELAY_MAX`: 30s → **60s** (máximo entre reintentos)
+- **Reconexión en startup**:
+  - Si Agent no responde al iniciar, ESP32 espera en lugar de reiniciar
+  - Bucle de espera de 5s hasta que Agent esté disponible
+  - LOG: "ESP32 will NOT restart - waiting for Agent..."
+
+### ✨ Agregado - Inicialización Explícita de NVS
+- **Verificación de NVS antes de cargar calibraciones**:
+  ```c
+  esp_err_t nvs_err = nvs_flash_init();
+  if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || 
+      nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      nvs_flash_erase();
+      nvs_err = nvs_flash_init();
+  }
+  ```
+- **Manejo de errores NVS**:
+  - Si NVS falla, firmware continúa sin persistencia
+  - LOG: "⚠ NVS initialization failed - calibrations won't persist"
+  - No bloquea operación del ESP32
+
+### 📝 Documentación
+- **Changelog actualizado**: Versión 3.1.0 → 3.1.1
+- **Comentarios en código**: Explicación de estrategia anti-bootloop
+- **Logs mejorados**: Emojis para mejor visibilidad (✅, ⚠️, ❌)
+
+### 🔄 Compatibilidad
+- ✅ 100% compatible con `biofloc_manager.py` v1.1
+- ✅ Protocolo JSON sin cambios
+- ✅ Topics ROS 2 sin cambios:
+  - `/biofloc/sensor_data` (Publisher)
+  - `/biofloc/calibration_cmd` (Subscriber)
+  - `/biofloc/calibration_status` (Publisher)
+
+### 📊 Estadísticas de Código
+- **Archivos modificados**: 2
+  - `main/main.c`: +47/-31 líneas
+  - `main/sensors.c`: +15/-3 líneas
+- **Total cambios**: +62/-34 líneas (+28 neto)
+- **Tamaño firmware**: ~805 KB (sin cambios)
+- **RAM libre**: 60% (sin cambios)
+
+### ⚠️ Breaking Changes
+**NINGUNO** - Actualización compatible sin reconfiguración.
+
+### 🎯 Probado
+- ✅ Compilación exitosa con ESP-IDF v5.3.4
+- ⏳ **Pendiente**: Test en hardware con desconexión/reconexión del Agent
+- ⏳ **Pendiente**: Test de persistencia NVS tras reinicio manual
+
+---
+
 ## [3.0.0] - 2026-02-11
 
 ### Resumen

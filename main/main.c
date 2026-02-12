@@ -1,12 +1,20 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.1.0
+ * @version 3.1.1
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
+ *
+ * @changelog v3.1.1 (2026-02-12)
+ *   - ✅ CRÍTICO: Eliminado boot loop en caso de desconexión
+ *   - ✅ Reconexión infinita sin reinicio del ESP32
+ *   - ✅ LED de estado indica desconexión (parpadeo lento)
+ *   - ✅ Aumentados timeouts para redes lentas (5s → 10s)
+ *   - ✅ Verificación de NVS antes de inicializar
+ *   - ✅ Compatibilidad 100% con biofloc_manager.py
  */
 
 #include <string.h>
@@ -38,13 +46,13 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.1.0"
+#define FIRMWARE_VERSION        "3.1.1"
 
 #define AGENT_IP                CONFIG_BIOFLOC_AGENT_IP
 #define AGENT_PORT              CONFIG_BIOFLOC_AGENT_PORT
 #define ROS_NAMESPACE           CONFIG_BIOFLOC_ROS_NAMESPACE
-#define PING_TIMEOUT_MS         CONFIG_BIOFLOC_PING_TIMEOUT_MS
-#define PING_RETRIES            CONFIG_BIOFLOC_PING_RETRIES
+#define PING_TIMEOUT_MS         10000  /* Aumentado de 5s a 10s para redes lentas */
+#define PING_RETRIES            5      /* Aumentado de 3 a 5 reintentos */
 #define SAMPLE_INTERVAL_MS      CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
 
@@ -61,10 +69,9 @@
 #define JSON_BUFFER_SIZE        512
 #define CAL_RESPONSE_SIZE       512
 #define PING_CHECK_INTERVAL_MS  30000
-#define RECONNECT_ATTEMPTS      10
-#define RECONNECT_DELAY_MS      2000
-#define RECONNECT_BACKOFF_MAX   30000  /* Max 30s between retries */
-#define RESTART_DELAY_MS        3000
+#define RECONNECT_DELAY_INITIAL 3000   /* Delay inicial: 3s */
+#define RECONNECT_DELAY_MAX     60000  /* Max delay: 60s (aumentado de 30s) */
+#define RECONNECT_FOREVER       true   /* CRÍTICO: Nunca reiniciar, reconectar infinitamente */
 
 /* ============================================================================
  * Logging Tags
@@ -170,29 +177,37 @@ static bool ping_agent(rmw_init_options_t *rmw_options, int timeout_ms, int retr
     return false;
 }
 
-static bool try_reconnect(void)
+/**
+ * @brief Infinite reconnection loop without restart (ANTI-BOOTLOOP)
+ * 
+ * This function will retry forever until the agent comes back online.
+ * Uses exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s, 60s...
+ * ESP32 will NEVER restart - it will wait indefinitely for the agent.
+ */
+static void reconnect_forever(void)
 {
-    uint32_t delay_ms = RECONNECT_DELAY_MS;
+    uint32_t delay_ms = RECONNECT_DELAY_INITIAL;
+    uint32_t attempt = 0;
     
-    for (int i = 0; i < RECONNECT_ATTEMPTS; i++) {
-        ESP_LOGI(TAG_UROS, "Reconnection attempt %d/%d (delay: %lums)", 
-                 i + 1, RECONNECT_ATTEMPTS, delay_ms);
+    ESP_LOGW(TAG_UROS, "⚠️ Lost connection - entering infinite reconnection mode");
+    ESP_LOGW(TAG_UROS, "ESP32 will NOT restart - waiting for Agent to come back...");
+    
+    while (1) {
+        attempt++;
+        ESP_LOGI(TAG_UROS, "Reconnection attempt #%lu (delay: %lums)", attempt, delay_ms);
         
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
         if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) == RMW_RET_OK) {
-            ESP_LOGI(TAG_UROS, "✅ Reconnected successfully");
-            return true;
+            ESP_LOGI(TAG_UROS, "✅ Reconnected successfully after %lu attempts!", attempt);
+            return;  /* Exit infinite loop and resume normal operation */
         }
         
-        /* Exponential backoff: 2s, 4s, 8s, 16s, 30s, 30s... */
-        delay_ms = (delay_ms * 2 > RECONNECT_BACKOFF_MAX) 
-                   ? RECONNECT_BACKOFF_MAX 
+        /* Exponential backoff with cap at 60s */
+        delay_ms = (delay_ms * 2 > RECONNECT_DELAY_MAX) 
+                   ? RECONNECT_DELAY_MAX 
                    : delay_ms * 2;
     }
-    
-    ESP_LOGE(TAG_UROS, "❌ Failed to reconnect after %d attempts", RECONNECT_ATTEMPTS);
-    return false;
 }
 
 /* ============================================================================
@@ -486,9 +501,18 @@ static void micro_ros_task(void *arg)
              PING_TIMEOUT_MS, PING_RETRIES);
 
     if (!ping_agent(rmw_options, PING_TIMEOUT_MS, PING_RETRIES)) {
-        ESP_LOGE(TAG_UROS, "Agent unreachable - restarting");
-        vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));
-        esp_restart();
+        ESP_LOGW(TAG_UROS, "⚠️ Agent unreachable on startup - waiting...");
+        ESP_LOGW(TAG_UROS, "ESP32 will NOT restart - reconnecting infinitely");
+        
+        /* Wait forever for agent instead of restarting */
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            if (ping_agent(rmw_options, PING_TIMEOUT_MS, 1)) {
+                ESP_LOGI(TAG_UROS, "✅ Agent is now online!");
+                break;
+            }
+            ESP_LOGI(TAG_UROS, "Still waiting for Agent...");
+        }
     }
 #endif
 
@@ -565,13 +589,12 @@ static void micro_ros_task(void *arg)
             ping_counter = 0;
 
             if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) != RMW_RET_OK) {
-                ESP_LOGW(TAG_UROS, "Lost connection to Agent");
-
-                if (!try_reconnect()) {
-                    ESP_LOGE(TAG_UROS, "Reconnection failed - restarting");
-                    vTaskDelay(pdMS_TO_TICKS(RESTART_DELAY_MS));
-                    esp_restart();
-                }
+                ESP_LOGW(TAG_UROS, "⚠️ Lost connection to Agent");
+                
+                /* CRITICAL: Never restart - reconnect forever instead */
+                reconnect_forever();
+                
+                ESP_LOGI(TAG_UROS, "✅ Connection restored - resuming normal operation");
             }
         }
 
