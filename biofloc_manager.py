@@ -46,6 +46,41 @@ ESP32_MAC = os.getenv("ESP32_MAC", "XX:XX:XX:XX:XX:XX")
 GATEWAY_IP = os.getenv("GATEWAY_IP", "10.42.0.1")
 NETWORK_RANGE = os.getenv("GATEWAY_NETWORK", "10.42.0.0/24")
 
+def detect_gateway_info():
+    """Detect active WiFi gateway information (IP and SSID)"""
+    try:
+        # Get IP address of wlan0 interface
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show", "wlan0"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            import re
+            # Extract IP address
+            match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
+            if match:
+                gateway_ip = match.group(1)
+                
+                # Try to get SSID
+                ssid_result = subprocess.run(
+                    ["iwgetid", "-r"],
+                    capture_output=True,
+                    text=True
+                )
+                
+                ssid = ssid_result.stdout.strip() if ssid_result.returncode == 0 else "<desconocido>"
+                
+                return gateway_ip, ssid
+        
+        # Fallback to default
+        return "10.42.0.1", "<desconocido>"
+        
+    except Exception as e:
+        print_warning(f"No se pudo detectar configuración de red: {e}")
+        return "10.42.0.1", "<desconocido>"
+
 def print_header(text):
     """Print formatted header"""
     print(f"\n{Colors.HEADER}{Colors.BOLD}{'='*70}")
@@ -134,33 +169,33 @@ def start_microros_agent():
     """Start micro-ROS Agent in background"""
     print_header("Iniciando micro-ROS Agent")
     
-    cmd = f"""
-    source /opt/ros/jazzy/setup.bash && \
-    source {MICROROS_WS}/install/local_setup.bash && \
-    ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888
-    """
+    # Detect gateway IP automatically
+    gateway_ip, ssid = detect_gateway_info()
+    
+    cmd = f"source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888"
     
     print_info("El Agent correrá en puerto UDP 8888")
+    print_info(f"IP del Gateway: {gateway_ip}")
+    if ssid != "<desconocido>":
+        print_info(f"Red WiFi: {ssid}")
     print_info("Presiona Ctrl+C para detener")
-    print_info("IP del Gateway: 10.42.0.1")
+    print()
     
-    run_command(cmd, cwd=PROJECT_ROOT, check=False)
+    # Use bash explicitly to support 'source' command
+    subprocess.run(['bash', '-c', cmd], cwd=PROJECT_ROOT)
 
 def start_sensor_bridge():
     """Start sensor DB bridge"""
     print_header("Iniciando Sensor DB Bridge")
     
-    cmd = f"""
-    cd {SCRIPTS_DIR} && \
-    source /opt/ros/jazzy/setup.bash && \
-    source {MICROROS_WS}/install/local_setup.bash && \
-    python3 sensor_db_bridge.py
-    """
+    cmd = f"cd {SCRIPTS_DIR} && source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && python3 sensor_db_bridge.py"
     
     print_info("El Bridge se conectará a MongoDB y al topic ROS /biofloc/sensor_data")
     print_info("Presiona Ctrl+C para detener")
+    print()
     
-    run_command(cmd, check=False)
+    # Use bash explicitly to support 'source' command
+    subprocess.run(['bash', '-c', cmd], check=False)
 
 def calibrate_ph():
     """Run pH calibration script"""
@@ -237,10 +272,15 @@ def calibrate_remote():
     print_info("  ✓ Persistencia automática en NVS")
     print("")
     
-    # Check if ROS is sourced
-    if 'ROS_DISTRO' not in os.environ:
-        print_error("ROS 2 no está configurado en este entorno")
-        print_info("Ejecuta: source /opt/ros/jazzy/setup.bash")
+    # Check if micro-ROS Agent is running
+    if not check_process_running('micro_ros_agent'):
+        print_error("El micro-ROS Agent NO está corriendo")
+        print_info("Necesitas iniciarlo primero con la opción [1] del menú")
+        print_info("O ejecuta manualmente:")
+        print_info("  source /opt/ros/jazzy/setup.bash")
+        print_info("  source ~/microros_ws/install/local_setup.bash")
+        print_info("  ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888")
+        print()
         return
     
     # Select sensor type
@@ -899,6 +939,12 @@ def check_system_status():
     """Check overall system status"""
     print_header("Verificación de Estado del Sistema")
     
+    # Check network configuration
+    gateway_ip, ssid = detect_gateway_info()
+    print_info(f"Red WiFi: {ssid}")
+    print_info(f"IP Gateway: {gateway_ip}")
+    print()
+    
     # Check Agent
     if check_process_running("micro_ros_agent"):
         print_success("micro-ROS Agent: EJECUTÁNDOSE")
@@ -917,16 +963,15 @@ def check_system_status():
     else:
         print_info("ESP32: No detectado en USB (puede estar ejecutándose de forma autónoma)")
     
-    # Check Gateway WiFi
+    # Check Gateway WiFi by checking wlan0 interface
     result = subprocess.run(
-        "ip addr show wlo1 2>/dev/null | grep 10.42.0.1",
-        shell=True,
+        ["ip", "addr", "show", "wlan0"],
         capture_output=True,
         text=True
     )
     
-    if result.stdout:
-        print_success("Gateway WiFi: ACTIVO (10.42.0.1)")
+    if result.returncode == 0 and gateway_ip in result.stdout:
+        print_success(f"Gateway WiFi: ACTIVO ({gateway_ip})")
     else:
         print_warning("Gateway WiFi: NO ACTIVO")
     
@@ -975,24 +1020,26 @@ def check_esp32_connectivity():
     """Check ESP32 network connectivity and IP address"""
     print_header("Verificación de Conectividad ESP32")
     
-
+    # Detect gateway info
+    gateway_ip, ssid = detect_gateway_info()
+    print_info(f"Red WiFi: {ssid}")
+    print_info(f"IP Gateway: {gateway_ip}")
     print_info(f"Buscando ESP32 con MAC: {ESP32_MAC}")
     print()
     
     # Check if gateway WiFi is active
     result = subprocess.run(
-        "ip addr show wlo1 2>/dev/null | grep 10.42.0.1",
-        shell=True,
+        ["ip", "addr", "show", "wlan0"],
         capture_output=True,
         text=True
     )
     
-    if not result.stdout:
-        print_error("Gateway WiFi NO ACTIVO en wlo1")
+    if result.returncode != 0 or gateway_ip not in result.stdout:
+        print_error("Gateway WiFi NO ACTIVO en wlan0")
         print_info("Inicia el hotspot gateway primero")
         return
     
-    print_success(f"Gateway WiFi: ACTIVO ({GATEWAY_IP})")
+    print_success(f"Gateway WiFi: ACTIVO ({gateway_ip})")
     
     # Check DHCP leases for ESP32
     print_info("Verificando leases DHCP...")
