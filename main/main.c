@@ -1,17 +1,19 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.0.0
+ * @version 3.1.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
+ *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
  */
 
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
+#include "cJSON.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,7 +38,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "2.1.0"
+#define FIRMWARE_VERSION        "3.1.0"
 
 #define AGENT_IP                CONFIG_BIOFLOC_AGENT_IP
 #define AGENT_PORT              CONFIG_BIOFLOC_AGENT_PORT
@@ -57,6 +59,7 @@
 #define SENSOR_TASK_STACK       8192
 #define SENSOR_TASK_PRIO        4
 #define JSON_BUFFER_SIZE        512
+#define CAL_RESPONSE_SIZE       512
 #define PING_CHECK_INTERVAL_MS  30000
 #define RECONNECT_ATTEMPTS      10
 #define RECONNECT_DELAY_MS      2000
@@ -100,7 +103,11 @@ typedef struct {
     rcl_node_t node;
     rclc_executor_t executor;
     rcl_publisher_t sensor_publisher;
+    rcl_publisher_t calibration_response_publisher;
+    rcl_subscription_t calibration_subscriber;
     std_msgs__msg__String sensor_msg;
+    std_msgs__msg__String calibration_cmd_msg;
+    std_msgs__msg__String calibration_response_msg;
     bool initialized;
 } microros_context_t;
 
@@ -262,6 +269,198 @@ static void sensor_task(void *arg)
 }
 
 /* ============================================================================
+ * Calibration Command Handler
+ * ============================================================================ */
+
+/**
+ * @brief Parse and execute calibration command from JSON
+ * 
+ * Expected JSON format:
+ * {
+ *   "sensor": "ph" | "temperature" | "dissolved_oxygen" | "conductivity" | "turbidity",
+ *   "action": "calibrate" | "reset" | "get",
+ *   "points": [
+ *     {"voltage": 1.42, "value": 4.01},
+ *     {"voltage": 2.45, "value": 6.86},
+ *     {"voltage": 3.28, "value": 9.18}
+ *   ]
+ * }
+ */
+static void calibration_callback(const void *msgin)
+{
+    const std_msgs__msg__String *msg = (const std_msgs__msg__String *)msgin;
+    char response_buffer[CAL_RESPONSE_SIZE];
+    
+    ESP_LOGI(TAG_UROS, "Received calibration command: %s", msg->data.data);
+
+    /* Parse JSON */
+    cJSON *json = cJSON_Parse((const char *)msg->data.data);
+    if (!json) {
+        ESP_LOGE(TAG_UROS, "Failed to parse calibration JSON");
+        snprintf(response_buffer, sizeof(response_buffer),
+                 "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+        goto send_response;
+    }
+
+    /* Extract sensor type */
+    cJSON *sensor_json = cJSON_GetObjectItem(json, "sensor");
+    if (!cJSON_IsString(sensor_json)) {
+        ESP_LOGE(TAG_UROS, "Missing or invalid 'sensor' field");
+        snprintf(response_buffer, sizeof(response_buffer),
+                 "{\"status\":\"error\",\"message\":\"Missing sensor field\"}");
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    const char *sensor_str = sensor_json->valuestring;
+    sensor_type_t sensor_type = SENSOR_TYPE_MAX;
+    
+    if (strcmp(sensor_str, "ph") == 0) {
+        sensor_type = SENSOR_TYPE_PH;
+    } else if (strcmp(sensor_str, "temperature") == 0) {
+        sensor_type = SENSOR_TYPE_TEMPERATURE;
+    } else if (strcmp(sensor_str, "dissolved_oxygen") == 0) {
+        sensor_type = SENSOR_TYPE_DISSOLVED_OXYGEN;
+    } else if (strcmp(sensor_str, "conductivity") == 0) {
+        sensor_type = SENSOR_TYPE_CONDUCTIVITY;
+    } else if (strcmp(sensor_str, "turbidity") == 0) {
+        sensor_type = SENSOR_TYPE_TURBIDITY;
+    } else {
+        ESP_LOGE(TAG_UROS, "Unknown sensor type: %s", sensor_str);
+        snprintf(response_buffer, sizeof(response_buffer),
+                 "{\"status\":\"error\",\"message\":\"Unknown sensor: %s\"}", sensor_str);
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    /* Extract action */
+    cJSON *action_json = cJSON_GetObjectItem(json, "action");
+    if (!cJSON_IsString(action_json)) {
+        ESP_LOGE(TAG_UROS, "Missing or invalid 'action' field");
+        snprintf(response_buffer, sizeof(response_buffer),
+                 "{\"status\":\"error\",\"message\":\"Missing action field\"}");
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    const char *action = action_json->valuestring;
+
+    /* Handle action: reset */
+    if (strcmp(action, "reset") == 0) {
+        esp_err_t err = sensors_reset_calibration(sensor_type);
+        if (err == ESP_OK) {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"success\",\"sensor\":\"%s\",\"message\":\"Calibration reset to factory defaults\"}",
+                     sensor_str);
+        } else {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"Reset failed\"}",
+                     sensor_str);
+        }
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    /* Handle action: get */
+    if (strcmp(action, "get") == 0) {
+        sensor_calibration_t cal;
+        esp_err_t err = sensors_get_calibration(sensor_type, &cal);
+        if (err == ESP_OK) {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"success\",\"sensor\":\"%s\",\"enabled\":%s,\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,\"points\":%d}",
+                     sensor_str, cal.enabled ? "true" : "false",
+                     cal.slope, cal.offset, cal.r_squared, cal.num_points);
+        } else {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"Failed to get calibration\"}",
+                     sensor_str);
+        }
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    /* Handle action: calibrate */
+    if (strcmp(action, "calibrate") == 0) {
+        cJSON *points_json = cJSON_GetObjectItem(json, "points");
+        if (!cJSON_IsArray(points_json)) {
+            ESP_LOGE(TAG_UROS, "Missing or invalid 'points' array");
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"message\":\"Missing points array\"}");
+            cJSON_Delete(json);
+            goto send_response;
+        }
+
+        int num_points = cJSON_GetArraySize(points_json);
+        if (num_points < 2 || num_points > MAX_CALIBRATION_POINTS) {
+            ESP_LOGE(TAG_UROS, "Invalid number of points: %d (need 2-5)", num_points);
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"message\":\"Need 2-5 calibration points, got %d\"}",
+                     num_points);
+            cJSON_Delete(json);
+            goto send_response;
+        }
+
+        calibration_point_t points[MAX_CALIBRATION_POINTS];
+        for (int i = 0; i < num_points; i++) {
+            cJSON *point = cJSON_GetArrayItem(points_json, i);
+            cJSON *voltage = cJSON_GetObjectItem(point, "voltage");
+            cJSON *value = cJSON_GetObjectItem(point, "value");
+
+            if (!cJSON_IsNumber(voltage) || !cJSON_IsNumber(value)) {
+                ESP_LOGE(TAG_UROS, "Invalid point %d: missing voltage or value", i);
+                snprintf(response_buffer, sizeof(response_buffer),
+                         "{\"status\":\"error\",\"message\":\"Invalid point %d\"}",i);
+                cJSON_Delete(json);
+                goto send_response;
+            }
+
+            points[i].voltage = (float)voltage->valuedouble;
+            points[i].value = (float)value->valuedouble;
+        }
+
+        /* Perform calibration */
+        calibration_response_t cal_response;
+        esp_err_t err = sensors_calibrate_generic(sensor_type, points, num_points, &cal_response);
+
+        if (err == ESP_OK && cal_response.status == CAL_STATUS_SUCCESS) {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"success\",\"sensor\":\"%s\",\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,\"message\":\"%s\"}",
+                     sensor_str, cal_response.slope, cal_response.offset,
+                     cal_response.r_squared, cal_response.message);
+        } else {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"%s\"}",
+                     sensor_str, cal_response.message);
+        }
+
+        cJSON_Delete(json);
+        goto send_response;
+    }
+
+    /* Unknown action */
+    ESP_LOGE(TAG_UROS, "Unknown action: %s", action);
+    snprintf(response_buffer, sizeof(response_buffer),
+             "{\"status\":\"error\",\"message\":\"Unknown action: %s\"}", action);
+    cJSON_Delete(json);
+
+send_response:
+    /* Publish response */
+    if (g_uros_ctx.initialized) {
+        g_uros_ctx.calibration_response_msg.data.data = response_buffer;
+        g_uros_ctx.calibration_response_msg.data.size = strlen(response_buffer);
+        g_uros_ctx.calibration_response_msg.data.capacity = CAL_RESPONSE_SIZE;
+
+        rcl_ret_t ret = rcl_publish(&g_uros_ctx.calibration_response_publisher,
+                                    &g_uros_ctx.calibration_response_msg, NULL);
+        if (ret == RCL_RET_OK) {
+            ESP_LOGI(TAG_UROS, "Calibration response sent");
+        } else {
+            ESP_LOGW(TAG_UROS, "Failed to send calibration response (rc=%d)", (int)ret);
+        }
+    }
+}
+
+/* ============================================================================
  * micro-ROS Task
  * ============================================================================ */
 
@@ -309,9 +508,41 @@ static void micro_ros_task(void *arg)
         "sensor_data"
     ));
 
+    ESP_LOGI(TAG_UROS, "Creating publisher: /%s/calibration_status", ROS_NAMESPACE);
+    RCCHECK(rclc_publisher_init_default(
+        &g_uros_ctx.calibration_response_publisher,
+        &g_uros_ctx.node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        "calibration_status"
+    ));
+
+    ESP_LOGI(TAG_UROS, "Creating subscriber: /%s/calibration_cmd", ROS_NAMESPACE);
+    RCCHECK(rclc_subscription_init_default(
+        &g_uros_ctx.calibration_subscriber,
+        &g_uros_ctx.node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        "calibration_cmd"
+    ));
+
+    /* Allocate memory for calibration command messages */
+    static char calibration_cmd_buffer[JSON_BUFFER_SIZE];
+    g_uros_ctx.calibration_cmd_msg.data.data = calibration_cmd_buffer;
+    g_uros_ctx.calibration_cmd_msg.data.size = 0;
+    g_uros_ctx.calibration_cmd_msg.data.capacity = JSON_BUFFER_SIZE;
+
+    ESP_LOGI(TAG_UROS, "Initializing executor (2 handles)");
     RCCHECK(rclc_executor_init(&g_uros_ctx.executor,
-                               &g_uros_ctx.support.context, 1,
+                               &g_uros_ctx.support.context, 2,
                                &g_uros_ctx.allocator));
+
+    ESP_LOGI(TAG_UROS, "Adding calibration subscriber to executor");
+    RCCHECK(rclc_executor_add_subscription(
+        &g_uros_ctx.executor,
+        &g_uros_ctx.calibration_subscriber,
+        &g_uros_ctx.calibration_cmd_msg,
+        &calibration_callback,
+        ON_NEW_DATA
+    ));
 
     g_uros_ctx.initialized = true;
     g_app_state.microros_ready = true;
@@ -319,7 +550,9 @@ static void micro_ros_task(void *arg)
     ESP_LOGI(TAG_MAIN, "=========================================");
     ESP_LOGI(TAG_MAIN, "  micro-ROS Ready!");
     ESP_LOGI(TAG_MAIN, "  Node: /%s/biofloc_node", ROS_NAMESPACE);
-    ESP_LOGI(TAG_MAIN, "  Topic: /%s/sensor_data", ROS_NAMESPACE);
+    ESP_LOGI(TAG_MAIN, "  Publisher: /%s/sensor_data", ROS_NAMESPACE);
+    ESP_LOGI(TAG_MAIN, "  Publisher: /%s/calibration_status", ROS_NAMESPACE);
+    ESP_LOGI(TAG_MAIN, "  Subscriber: /%s/calibration_cmd", ROS_NAMESPACE);
     ESP_LOGI(TAG_MAIN, "=========================================");
 
     uint32_t ping_counter = 0;
@@ -346,6 +579,8 @@ static void micro_ros_task(void *arg)
     }
 
     /* Cleanup (unreachable but good practice) */
+    RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.calibration_response_publisher, &g_uros_ctx.node));
+    RCSOFTCHECK(rcl_subscription_fini(&g_uros_ctx.calibration_subscriber, &g_uros_ctx.node));
     RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.sensor_publisher, &g_uros_ctx.node));
     RCSOFTCHECK(rclc_executor_fini(&g_uros_ctx.executor));
     RCSOFTCHECK(rcl_node_fini(&g_uros_ctx.node));

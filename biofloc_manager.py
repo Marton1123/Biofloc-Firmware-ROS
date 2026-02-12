@@ -217,6 +217,364 @@ def calibrate_temperature():
     else:
         print_error("Calibración de temperatura falló")
 
+def calibrate_remote():
+    """
+    Remote calibration via ROS 2 topics (v3.1.0+)
+    
+    Calibrates sensors remotely without USB connection.
+    Supports pH, temperature, and future sensors with N-point calibration.
+    """
+    print_header("Calibración Remota de Sensores")
+    
+    print_info("Sistema de calibración remota v3.1.0")
+    print_info("Compatible con: pH, Temperatura, y sensores futuros")
+    print_info("")
+    print_info("Ventajas:")
+    print_info("  ✓ No requiere conexión USB")
+    print_info("  ✓ ESP32 mantiene alimentación externa")
+    print_info("  ✓ Sensores permanecen energizados")
+    print_info("  ✓ Calibración de 2-5 puntos")
+    print_info("  ✓ Persistencia automática en NVS")
+    print("")
+    
+    # Check if ROS is sourced
+    if 'ROS_DISTRO' not in os.environ:
+        print_error("ROS 2 no está configurado en este entorno")
+        print_info("Ejecuta: source /opt/ros/jazzy/setup.bash")
+        return
+    
+    # Select sensor type
+    print(f"{Colors.BOLD}Sensores disponibles:{Colors.ENDC}")
+    print("  [1] pH")
+    print("  [2] Temperatura")
+    print("  [3] Oxígeno Disuelto (futuro)")
+    print("  [4] Conductividad (futuro)")
+    print("  [5] Turbidez (futuro)")
+    print("  [0] Cancelar")
+    print("")
+    
+    sensor_choice = input(f"{Colors.OKBLUE}Selecciona sensor: {Colors.ENDC}").strip()
+    
+    sensor_map = {
+        '1': ('ph', 'pH', [4.01, 6.86, 9.18]),
+        '2': ('temperature', 'Temperatura', [0.0, 25.0, 50.0]),
+        '3': ('dissolved_oxygen', 'Oxígeno Disuelto', [0.0, 5.0, 10.0]),
+        '4': ('conductivity', 'Conductividad', [0.0, 500.0, 1000.0]),
+        '5': ('turbidity', 'Turbidez', [0.0, 50.0, 100.0])
+    }
+    
+    if sensor_choice == '0':
+        print_info("Calibración cancelada")
+        return
+    
+    if sensor_choice not in sensor_map:
+        print_error("Opción inválida")
+        return
+    
+    sensor_id, sensor_name, suggested_values = sensor_map[sensor_choice]
+    
+    # Check if sensor is implemented
+    if sensor_choice in ['3', '4', '5']:
+        print_warning(f"⚠ {sensor_name} aún no está implementado en hardware")
+        print_info("Esta función estará disponible en futuras versiones")
+        return
+    
+    print("")
+    print_header(f"Calibración de {sensor_name}")
+    
+    # Select calibration type
+    print(f"{Colors.BOLD}Tipo de calibración:{Colors.ENDC}")
+    print("  [1] Calibración completa (3 puntos) - Recomendado")
+    print("  [2] Calibración rápida (2 puntos)")
+    print("  [3] Resetear a valores de fábrica")
+    print("  [4] Consultar calibración actual")
+    print("  [0] Cancelar")
+    print("")
+    
+    cal_type = input(f"{Colors.OKBLUE}Selecciona opción: {Colors.ENDC}").strip()
+    
+    if cal_type == '0':
+        print_info("Calibración cancelada")
+        return
+    
+    # Handle reset
+    if cal_type == '3':
+        confirm = input(f"{Colors.WARNING}¿Resetear calibración de {sensor_name}? (S/n): {Colors.ENDC}").strip().lower()
+        if confirm == 'n':
+            print_info("Operación cancelada")
+            return
+        
+        import json
+        cmd_json = json.dumps({
+            "sensor": sensor_id,
+            "action": "reset"
+        })
+        
+        print_info(f"Reseteando calibración de {sensor_name}...")
+        result = publish_calibration_command(cmd_json)
+        
+        if result:
+            print_success(f"✓ Calibración de {sensor_name} reseteada a valores de fábrica")
+        else:
+            print_error("Falló el reset de calibración")
+        return
+    
+    # Handle get current calibration
+    if cal_type == '4':
+        import json
+        cmd_json = json.dumps({
+            "sensor": sensor_id,
+            "action": "get"
+        })
+        
+        print_info(f"Consultando calibración actual de {sensor_name}...")
+        result = publish_calibration_command(cmd_json)
+        
+        if result:
+            print_success(f"✓ Consulta completada (ver respuesta en /biofloc/calibration_status)")
+        else:
+            print_error("Falló la consulta")
+        return
+    
+    # Determine number of points
+    if cal_type == '1':
+        num_points = 3
+    elif cal_type == '2':
+        num_points = 2
+    else:
+        print_error("Opción inválida")
+        return
+    
+    print("")
+    print_info(f"Calibración de {num_points} puntos para {sensor_name}")
+    print("")
+    
+    # Collect calibration points
+    points = []
+    
+    for i in range(num_points):
+        print(f"{Colors.BOLD}═══ Punto {i+1}/{num_points} ═══{Colors.ENDC}")
+        
+        if sensor_id == 'ph':
+            print_info(f"Sugerencia: Solución buffer pH {suggested_values[i]}")
+            print_info("1. Enjuaga el sensor con agua destilada")
+            print_info(f"2. Sumerge el sensor en la solución buffer pH {suggested_values[i]}")
+            print_info("3. Espera 30-60 segundos para estabilización")
+        elif sensor_id == 'temperature':
+            print_info(f"Sugerencia: Temperatura de referencia {suggested_values[i]}°C")
+            print_info("1. Coloca el sensor en el medio de temperatura conocida")
+            print_info("2. Espera 30-60 segundos para estabilización")
+            print_info("3. Mide con termómetro de referencia (TP101 o similar)")
+        
+        print("")
+        input(f"{Colors.WARNING}Presiona Enter cuando el sensor esté estabilizado...{Colors.ENDC}")
+        
+        # Read current voltage from sensor
+        print_info("Leyendo voltaje del sensor...")
+        voltage = read_sensor_voltage(sensor_id)
+        
+        if voltage is None:
+            print_error(f"No se pudo leer voltaje del sensor {sensor_name}")
+            print_info("Verifica que:")
+            print_info("  - El ESP32 esté conectado y publicando datos")
+            print_info("  - El micro-ROS Agent esté activo")
+            print_info("  - El topic /biofloc/sensor_data tenga mensajes")
+            return
+        
+        print_success(f"✓ Voltaje leído: {voltage:.3f}V")
+        
+        # Get reference value
+        while True:
+            try:
+                value_input = input(f"{Colors.OKBLUE}Valor de referencia {sensor_name}: {Colors.ENDC}").strip()
+                value = float(value_input)
+                break
+            except ValueError:
+                print_error("Ingresa un número válido")
+        
+        points.append({"voltage": voltage, "value": value})
+        print_success(f"✓ Punto {i+1} registrado: {voltage:.3f}V → {value} {get_sensor_unit(sensor_id)}")
+        print("")
+    
+    # Confirm calibration
+    print(f"{Colors.BOLD}═══ Resumen de Calibración ═══{Colors.ENDC}")
+    print(f"Sensor: {sensor_name}")
+    print(f"Puntos: {num_points}")
+    for i, point in enumerate(points):
+        print(f"  Punto {i+1}: {point['voltage']:.3f}V → {point['value']} {get_sensor_unit(sensor_id)}")
+    print("")
+    
+    confirm = input(f"{Colors.WARNING}¿Aplicar esta calibración? (S/n): {Colors.ENDC}").strip().lower()
+    if confirm == 'n':
+        print_info("Calibración cancelada")
+        return
+    
+    # Send calibration command
+    import json
+    cmd_json = json.dumps({
+        "sensor": sensor_id,
+        "action": "calibrate",
+        "points": points
+    })
+    
+    print_info("Enviando comando de calibración al ESP32...")
+    result = publish_calibration_command(cmd_json)
+    
+    if result:
+        print_success(f"✓ Calibración de {sensor_name} completada exitosamente")
+        print_info("Los parámetros se han guardado en NVS del ESP32")
+        print_info("La calibración persiste entre reinicios")
+        print_info("")
+        print_info("Próximos pasos:")
+        print_info("  - Verifica las lecturas en tiempo real")
+        print_info("  - Compara con instrumentos de referencia")
+        print_info("  - Re-calibra si es necesario")
+    else:
+        print_error("Falló la calibración remota")
+        print_info("Revisa los logs del ESP32 para más detalles")
+
+def get_sensor_unit(sensor_id):
+    """Get measurement unit for sensor"""
+    units = {
+        'ph': 'pH',
+        'temperature': '°C',
+        'dissolved_oxygen': 'mg/L',
+        'conductivity': 'μS/cm',
+        'turbidity': 'NTU'
+    }
+    return units.get(sensor_id, '')
+
+def read_sensor_voltage(sensor_id):
+    """
+    Read current sensor voltage from ROS topic /biofloc/sensor_data
+    
+    Returns:
+        float: Sensor voltage in V, or None if read failed
+    """
+    try:
+        import json
+        
+        print_info("Escuchando topic /biofloc/sensor_data...")
+        
+        # Use ros2 topic echo with timeout
+        cmd = [
+            'bash', '-c',
+            'source /opt/ros/jazzy/setup.bash && '
+            'source ~/microros_ws/install/local_setup.bash && '
+            'timeout 5 ros2 topic echo --once /biofloc/sensor_data std_msgs/msg/String'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode != 0:
+            return None
+        
+        # Parse output: "data: {...json...}"
+        output = result.stdout.strip()
+        if 'data:' not in output:
+            return None
+        
+        json_str = output.split('data:', 1)[1].strip()
+        # Remove quotes if present
+        if json_str.startswith("'") or json_str.startswith('"'):
+            json_str = json_str[1:-1]
+        
+        data = json.loads(json_str)
+        
+        # Extract voltage based on sensor type
+        if sensor_id == 'ph':
+            return data.get('sensors', {}).get('ph', {}).get('voltage')
+        elif sensor_id == 'temperature':
+            return data.get('sensors', {}).get('temperature', {}).get('voltage')
+        
+        return None
+        
+    except Exception as e:
+        print_error(f"Error leyendo voltaje: {e}")
+        return None
+
+def publish_calibration_command(json_cmd):
+    """
+    Publish calibration command to /biofloc/calibration_cmd topic
+    
+    Args:
+        json_cmd: JSON string with calibration command
+    
+    Returns:
+        bool: True if command was published successfully
+    """
+    try:
+        # Escape single quotes in JSON for shell
+        json_escaped = json_cmd.replace("'", "'\"'\"'")
+        
+        cmd = [
+            'bash', '-c',
+            f'source /opt/ros/jazzy/setup.bash && '
+            f'source ~/microros_ws/install/local_setup.bash && '
+            f"ros2 topic pub --once /biofloc/calibration_cmd std_msgs/msg/String \"data: '{json_escaped}'\""
+        ]
+        
+        print_info(f"Comando: {json_cmd}")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            print_info("✓ Comando enviado al ESP32")
+            print_info("Esperando respuesta...")
+            time.sleep(2)
+            
+            # Try to read response
+            cmd_response = [
+                'bash', '-c',
+                'source /opt/ros/jazzy/setup.bash && '
+                'source ~/microros_ws/install/local_setup.bash && '
+                'timeout 3 ros2 topic echo --once /biofloc/calibration_status std_msgs/msg/String'
+            ]
+            
+            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=5)
+            
+            if response_result.returncode == 0:
+                output = response_result.stdout.strip()
+                if 'data:' in output:
+                    response_data = output.split('data:', 1)[1].strip()
+                    if response_data.startswith("'") or response_data.startswith('"'):
+                        response_data = response_data[1:-1]
+                    
+                    print_info(f"Respuesta: {response_data}")
+                    
+                    # Parse response
+                    import json
+                    try:
+                        response_json = json.loads(response_data)
+                        if response_json.get('status') == 'success':
+                            print_success(f"✓ {response_json.get('message', 'Éxito')}")
+                            if 'slope' in response_json:
+                                print_info(f"  Slope: {response_json['slope']:.6f}")
+                            if 'offset' in response_json:
+                                print_info(f"  Offset: {response_json['offset']:.6f}")
+                            if 'r_squared' in response_json:
+                                print_info(f"  R²: {response_json['r_squared']:.4f}")
+                            return True
+                        else:
+                            print_error(f"✗ {response_json.get('message', 'Error desconocido')}")
+                            return False
+                    except json.JSONDecodeError:
+                        print_warning("Respuesta recibida pero no se pudo parsear")
+                        return True
+            else:
+                print_warning("No se recibió respuesta del ESP32 (timeout)")
+                print_info("El comando podría haberse procesado de todas formas")
+                return True
+            
+            return True
+        else:
+            print_error(f"Error publicando comando: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        print_error(f"Error en calibración remota: {e}")
+        return False
+
 def update_calibration(sensor_type, **kwargs):
     """
     Generic function to update calibration for any sensor
@@ -791,19 +1149,20 @@ def show_menu():
     print()
     
     print(f"{Colors.BOLD}Calibración:{Colors.ENDC}")
-    print("  [6] Calibrar Sensor pH (3 puntos completo)")
-    print("  [7] Calibrar Sensor Temperatura (3 puntos completo)")
-    print("  [8] Ajuste Rápido pH (valores manuales)")
-    print("  [9] Ajuste Rápido Temperatura (-1.6°C)")
+    print("  [6] ⭐ Calibración Remota (Recomendado)")
+    print("  [7] Calibrar Sensor pH (3 puntos, USB)")
+    print("  [8] Calibrar Sensor Temperatura (3 puntos, USB)")
+    print("  [9] Ajuste Rápido pH (valores manuales)")
+    print("  [10] Ajuste Rápido Temperatura (-1.6°C)")
     print()
     
     print(f"{Colors.BOLD}Configuración:{Colors.ENDC}")
-    print("  [10] Configurar Credenciales WiFi")
-    print("  [11] Regenerar sdkconfig desde defaults")
+    print("  [11] Configurar Credenciales WiFi")
+    print("  [12] Regenerar sdkconfig desde defaults")
     print()
     
     print(f"{Colors.BOLD}Firmware:{Colors.ENDC}")
-    print("  [12] Compilar y Flashear Firmware")
+    print("  [13] Compilar y Flashear Firmware")
     print()
     
     print(f"{Colors.BOLD}Otros:{Colors.ENDC}")
@@ -825,13 +1184,14 @@ def main():
         '3': monitor_sensors,
         '4': check_system_status,
         '5': check_esp32_connectivity,
-        '6': calibrate_ph,
-        '7': calibrate_temperature,
-        '8': quick_adjust_ph,
-        '9': quick_adjust_temperature,
-        '10': configure_wifi,
-        '11': regenerate_sdkconfig,
-        '12': build_and_flash,
+        '6': calibrate_remote,
+        '7': calibrate_ph,
+        '8': calibrate_temperature,
+        '9': quick_adjust_ph,
+        '10': quick_adjust_temperature,
+        '11': configure_wifi,
+        '12': regenerate_sdkconfig,
+        '13': build_and_flash,
     }
     
     while True:

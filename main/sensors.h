@@ -111,6 +111,126 @@ esp_err_t sensors_read_temperature(sensor_reading_t *reading);
  * Calibration Functions
  * ============================================================================ */
 
+#define MAX_CALIBRATION_POINTS  5   /**< Maximum calibration points per sensor */
+
+/**
+ * @brief Sensor types for calibration
+ */
+typedef enum {
+    SENSOR_TYPE_PH = 0,
+    SENSOR_TYPE_TEMPERATURE,
+    SENSOR_TYPE_DISSOLVED_OXYGEN,
+    SENSOR_TYPE_CONDUCTIVITY,
+    SENSOR_TYPE_TURBIDITY,
+    SENSOR_TYPE_MAX
+} sensor_type_t;
+
+/**
+ * @brief Generic calibration point (voltage/value pair)
+ */
+typedef struct {
+    float voltage;      /**< Sensor voltage reading (V) */
+    float value;        /**< Known physical value (pH, °C, etc.) */
+} calibration_point_t;
+
+/**
+ * @brief Generic sensor calibration data
+ */
+typedef struct {
+    sensor_type_t type;                             /**< Sensor type identifier */
+    calibration_point_t points[MAX_CALIBRATION_POINTS]; /**< Calibration points */
+    uint8_t num_points;                             /**< Number of valid points (2-5) */
+    float slope;                                    /**< Computed linear slope */
+    float offset;                                   /**< Computed linear offset */
+    bool enabled;                                   /**< true if calibration is active */
+    float r_squared;                                /**< Goodness of fit (0-1) */
+    char timestamp[32];                             /**< Calibration timestamp ISO8601 */
+} sensor_calibration_t;
+
+/**
+ * @brief Calibration status codes
+ */
+typedef enum {
+    CAL_STATUS_SUCCESS = 0,
+    CAL_STATUS_INVALID_SENSOR,
+    CAL_STATUS_INVALID_POINTS,
+    CAL_STATUS_INSUFFICIENT_POINTS,
+    CAL_STATUS_NVS_ERROR,
+    CAL_STATUS_NOT_INITIALIZED
+} calibration_status_t;
+
+/**
+ * @brief Calibration response structure
+ */
+typedef struct {
+    sensor_type_t sensor;
+    calibration_status_t status;
+    float slope;
+    float offset;
+    float r_squared;
+    char message[128];
+} calibration_response_t;
+
+/**
+ * @brief Perform N-point calibration for any sensor
+ * 
+ * @param[in] type Sensor type to calibrate
+ * @param[in] points Array of calibration points (voltage/value pairs)
+ * @param[in] num_points Number of points (2-5)
+ * @param[out] response Calibration result and status
+ * @return ESP_OK on success
+ * 
+ * @note Uses linear regression for N>=2 points
+ * @note Persists calibration data to NVS
+ */
+esp_err_t sensors_calibrate_generic(sensor_type_t type,
+                                     const calibration_point_t *points,
+                                     uint8_t num_points,
+                                     calibration_response_t *response);
+
+/**
+ * @brief Get calibration data for a sensor
+ * 
+ * @param[in] type Sensor type
+ * @param[out] calib Calibration data structure
+ * @return ESP_OK on success
+ */
+esp_err_t sensors_get_calibration(sensor_type_t type, sensor_calibration_t *calib);
+
+/**
+ * @brief Reset sensor calibration to factory defaults
+ * 
+ * @param[in] type Sensor type to reset
+ * @return ESP_OK on success
+ */
+esp_err_t sensors_reset_calibration(sensor_type_t type);
+
+/**
+ * @brief Load all sensor calibrations from NVS
+ * @return ESP_OK on success
+ */
+esp_err_t sensors_load_calibrations(void);
+
+/**
+ * @brief Save sensor calibration to NVS
+ * 
+ * @param[in] type Sensor type
+ * @return ESP_OK on success
+ */
+esp_err_t sensors_save_calibration(sensor_type_t type);
+
+/**
+ * @brief Get sensor type name as string
+ * 
+ * @param[in] type Sensor type
+ * @return Sensor name string
+ */
+const char* sensors_get_type_name(sensor_type_t type);
+
+/* ============================================================================
+ * Legacy pH Calibration (deprecated - use sensors_calibrate_generic)
+ * ============================================================================ */
+
 /**
  * @brief Calibration parameters for pH sensor
  */
@@ -122,41 +242,26 @@ typedef struct {
 
 /**
  * @brief Set pH calibration using 2-point method
- * 
- * @param[in] voltage_low Voltage reading for low pH buffer (V)
- * @param[in] ph_low Known pH value of low buffer (e.g., 4.0)
- * @param[in] voltage_high Voltage reading for high pH buffer (V)
- * @param[in] ph_high Known pH value of high buffer (e.g., 10.0)
- * @return ESP_OK on success
- * 
- * @note Place sensor in buffer solution, wait for stabilization,
- *       then call sensors_read_ph() to get voltage reading
+ * @deprecated Use sensors_calibrate_generic() instead
  */
 esp_err_t sensors_calibrate_ph_2point(float voltage_low, float ph_low,
                                        float voltage_high, float ph_high);
 
 /**
  * @brief Set pH calibration parameters directly
- * 
- * @param[in] slope Linear slope coefficient
- * @param[in] offset Linear offset coefficient
- * @return ESP_OK on success
- * 
- * @note Formula: pH = slope * V_sensor + offset
+ * @deprecated Use sensors_calibrate_generic() instead
  */
 esp_err_t sensors_calibrate_ph_manual(float slope, float offset);
 
 /**
  * @brief Reset pH calibration to factory defaults (datasheet values)
- * @return ESP_OK on success
+ * @deprecated Use sensors_reset_calibration() instead
  */
 esp_err_t sensors_calibrate_ph_reset(void);
 
 /**
  * @brief Get current pH calibration parameters
- * 
- * @param[out] calib Pointer to structure for storing calibration
- * @return ESP_OK on success
+ * @deprecated Use sensors_get_calibration() instead
  */
 esp_err_t sensors_get_ph_calibration(ph_calibration_t *calib);
 
