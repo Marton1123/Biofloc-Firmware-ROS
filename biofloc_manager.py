@@ -822,18 +822,24 @@ def build_and_flash():
         print_info("Cancelado")
         return
     
-    cmd = f"""
-    source {ESP_IDF_PATH}/export.sh && \
-    cd {PROJECT_ROOT} && \
-    idf.py build && \
-    idf.py -p /dev/ttyUSB0 flash
-    """
+    # Use bash explicitly for source command
+    cmd = [
+        'bash', '-c',
+        f'source {ESP_IDF_PATH}/export.sh && '
+        f'cd {PROJECT_ROOT} && '
+        f'idf.py build && '
+        f'idf.py -p /dev/ttyUSB0 flash'
+    ]
     
-    if run_command(cmd, cwd=PROJECT_ROOT, check=False):
-        print_success("Firmware compilado y flasheado exitosamente")
-        print_info("El ESP32 se reiniciará automáticamente")
-    else:
-        print_error("Falló la compilación o el flasheo")
+    try:
+        result = subprocess.run(cmd, check=False, text=True)
+        if result.returncode == 0:
+            print_success("Firmware compilado y flasheado exitosamente")
+            print_info("El ESP32 se reiniciará automáticamente")
+        else:
+            print_error("Falló la compilación o el flasheo")
+    except Exception as e:
+        print_error(f"Error: {e}")
 
 def regenerate_sdkconfig():
     """Regenerate sdkconfig from defaults"""
@@ -848,15 +854,26 @@ def regenerate_sdkconfig():
         print_info("Cancelado")
         return False
     
-    cmd = f"""
-    cd {PROJECT_ROOT} && \
-    rm -f sdkconfig && \
-    source {ESP_IDF_PATH}/export.sh && \
-    idf.py reconfigure
-    """
+    # Use bash explicitly for source command
+    cmd = [
+        'bash', '-c',
+        f'cd {PROJECT_ROOT} && '
+        f'rm -f sdkconfig && '
+        f'source {ESP_IDF_PATH}/export.sh && '
+        f'idf.py reconfigure'
+    ]
     
-    if run_command(cmd, check=False):
-        print_success("sdkconfig regenerado desde defaults")
+    try:
+        result = subprocess.run(cmd, check=False, text=True)
+        if result.returncode == 0:
+            print_success("sdkconfig regenerado desde defaults")
+            return True
+        else:
+            print_error("Falló la regeneración")
+            return False
+    except Exception as e:
+        print_error(f"Error: {e}")
+        return False
         
         # Offer to build immediately
         choice = input("\n¿Compilar y flashear firmware ahora? (S/n): ").strip().lower()
