@@ -534,6 +534,10 @@ def read_sensor_voltage(sensor_id):
         if json_str.startswith("'") or json_str.startswith('"'):
             json_str = json_str[1:-1]
         
+        # CRITICAL: Remove control characters (newlines, tabs) that break JSON parsing
+        # ROS topic echo may return pretty-printed JSON with newlines
+        json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
+        
         # Parse JSON
         try:
             data = json.loads(json_str)
