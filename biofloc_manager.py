@@ -495,42 +495,78 @@ def read_sensor_voltage(sensor_id):
         import json
         
         print_info("Escuchando topic /biofloc/sensor_data...")
+        print_info("Esperando mensaje del ESP32 (puede tomar hasta 10 segundos)...")
         
-        # Use ros2 topic echo with timeout
+        # ESP32 publishes every 4 seconds, so wait up to 15s to be safe
         cmd = [
             'bash', '-c',
             'source /opt/ros/jazzy/setup.bash && '
             'source ~/microros_ws/install/local_setup.bash && '
-            'timeout 5 ros2 topic echo --once /biofloc/sensor_data std_msgs/msg/String'
+            'timeout 15 ros2 topic echo --once /biofloc/sensor_data std_msgs/msg/String 2>&1'
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         
+        # Debug output
         if result.returncode != 0:
+            print_warning(f"Comando falló con código {result.returncode}")
+            if result.stderr:
+                print_warning(f"Error: {result.stderr[:200]}")
+            if result.stdout:
+                print_warning(f"Output: {result.stdout[:200]}")
             return None
         
         # Parse output: "data: {...json...}"
         output = result.stdout.strip()
+        
+        if not output:
+            print_warning("No se recibió salida del comando")
+            return None
+            
         if 'data:' not in output:
+            print_warning(f"Formato inesperado. Output: {output[:200]}")
             return None
         
+        # Extract JSON string after "data:"
         json_str = output.split('data:', 1)[1].strip()
-        # Remove quotes if present
+        
+        # Remove outer quotes if present (ROS wraps the string)
         if json_str.startswith("'") or json_str.startswith('"'):
             json_str = json_str[1:-1]
         
-        data = json.loads(json_str)
+        # Parse JSON
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as je:
+            print_warning(f"Error parseando JSON: {je}")
+            print_warning(f"JSON string: {json_str[:200]}")
+            return None
         
         # Extract voltage based on sensor type
         if sensor_id == 'ph':
-            return data.get('sensors', {}).get('ph', {}).get('voltage')
+            voltage = data.get('sensors', {}).get('ph', {}).get('voltage')
         elif sensor_id == 'temperature':
-            return data.get('sensors', {}).get('temperature', {}).get('voltage')
+            voltage = data.get('sensors', {}).get('temperature', {}).get('voltage')
+        else:
+            print_warning(f"Tipo de sensor desconocido: {sensor_id}")
+            return None
         
+        if voltage is None:
+            print_warning(f"No se encontró voltaje para sensor {sensor_id} en JSON")
+            print_warning(f"Datos recibidos: {json_str[:200]}")
+            return None
+        
+        print_success(f"✓ Voltaje recibido: {voltage}V")
+        return voltage
+        
+    except subprocess.TimeoutExpired:
+        print_error("Timeout: No se recibieron datos en 20 segundos")
+        print_info("Verifica que el ESP32 esté publicando: ros2 topic hz /biofloc/sensor_data")
         return None
-        
     except Exception as e:
         print_error(f"Error leyendo voltaje: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def publish_calibration_command(json_cmd):
