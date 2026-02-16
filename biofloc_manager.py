@@ -495,17 +495,18 @@ def read_sensor_voltage(sensor_id):
         import json
         
         print_info("Escuchando topic /biofloc/sensor_data...")
-        print_info("Esperando mensaje del ESP32 (puede tomar hasta 10 segundos)...")
+        print_info("Esperando mensaje del ESP32 (puede tomar hasta 20 segundos)...")
         
-        # ESP32 publishes every 4 seconds, so wait up to 15s to be safe
+        # ESP32 publishes every 4 seconds, so wait up to 20s to be safe
+        # --full-length prevents ROS 2 from truncating long JSON messages
         cmd = [
             'bash', '-c',
             'source /opt/ros/jazzy/setup.bash && '
             'source ~/microros_ws/install/local_setup.bash && '
-            'timeout 15 ros2 topic echo --once /biofloc/sensor_data std_msgs/msg/String 2>&1'
+            'timeout 20 ros2 topic echo --once --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         
         # Debug output
         if result.returncode != 0:
@@ -564,7 +565,7 @@ def read_sensor_voltage(sensor_id):
         return voltage
         
     except subprocess.TimeoutExpired:
-        print_error("Timeout: No se recibieron datos en 20 segundos")
+        print_error("Timeout: No se recibieron datos en 25 segundos")
         print_info("Verifica que el ESP32 esté publicando: ros2 topic hz /biofloc/sensor_data")
         return None
     except Exception as e:
@@ -596,7 +597,7 @@ def publish_calibration_command(json_cmd):
         
         print_info(f"Comando: {json_cmd}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         
         if result.returncode == 0:
             print_info("✓ Comando enviado al ESP32")
@@ -608,10 +609,10 @@ def publish_calibration_command(json_cmd):
                 'bash', '-c',
                 'source /opt/ros/jazzy/setup.bash && '
                 'source ~/microros_ws/install/local_setup.bash && '
-                'timeout 3 ros2 topic echo --once /biofloc/calibration_status std_msgs/msg/String'
+                'timeout 8 ros2 topic echo --once --full-length /biofloc/calibration_status std_msgs/msg/String'
             ]
             
-            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=5)
+            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=10)
             
             if response_result.returncode == 0:
                 output = response_result.stdout.strip()
@@ -1022,9 +1023,9 @@ def check_system_status():
     if "/biofloc/sensor_data" in result.stdout:
         print_success("Topic ROS: /biofloc/sensor_data DISPONIBLE")
         
-        # Check if messages are being published (ESP32 publishes every 4s, wait max 8s)
-        print_info("Verificando mensajes (esperando hasta 8s)...")
-        cmd_echo = f"timeout 8 bash -c 'source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && ros2 topic echo /biofloc/sensor_data --once 2>&1'"
+        # Check if messages are being published (ESP32 publishes every 4s, wait max 12s)
+        print_info("Verificando mensajes (esperando hasta 12s)...")
+        cmd_echo = f"timeout 12 bash -c 'source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && ros2 topic echo /biofloc/sensor_data --once --full-length 2>&1'"
         result_echo = subprocess.run(cmd_echo, shell=True, capture_output=True, text=True)
         
         if result_echo.returncode == 0 and result_echo.stdout.strip():
@@ -1051,7 +1052,7 @@ def check_system_status():
             except (KeyboardInterrupt, EOFError):
                 print_info("\nCálculo de tasa omitido")
         else:
-            print_warning("No se recibieron mensajes en 8s (ESP32 publica cada 4s)")
+            print_warning("No se recibieron mensajes en 12s (ESP32 publica cada 4s)")
             print_info("Verifica que el ESP32 esté encendido y conectado al gateway WiFi")
     else:
         print_warning("Topic ROS: /biofloc/sensor_data NO ENCONTRADO")
@@ -1165,10 +1166,10 @@ def check_esp32_connectivity():
             print_warning(f"ESP32 no responde al ping")
         
         # Check if publishing to ROS topic
-        print_info("Verificando comunicación ROS (esperando mensaje hasta 8s)...")
+        print_info("Verificando comunicación ROS (esperando mensaje hasta 12s)...")
         
         # First check if messages are being published (ESP32 publishes every 4s)
-        cmd_echo = f"timeout 8 bash -c 'source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && ros2 topic echo /biofloc/sensor_data --once 2>&1'"
+        cmd_echo = f"timeout 12 bash -c 'source /opt/ros/jazzy/setup.bash && source {MICROROS_WS}/install/local_setup.bash && ros2 topic echo /biofloc/sensor_data --once --full-length 2>&1'"
         result_echo = subprocess.run(cmd_echo, shell=True, capture_output=True, text=True)
         
         if result_echo.returncode == 0 and result_echo.stdout.strip():
@@ -1195,7 +1196,7 @@ def check_esp32_connectivity():
             except (KeyboardInterrupt, EOFError):
                 print_info("\nCálculo de tasa omitido")
         else:
-            print_warning("No se recibieron mensajes en 8s (ESP32 publica cada 4s)")
+            print_warning("No se recibieron mensajes en 12s (ESP32 publica cada 4s)")
             print_info("Verifica que el ESP32 esté encendido y conectado al gateway WiFi")
 
         
