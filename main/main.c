@@ -596,8 +596,13 @@ static void micro_ros_task(void *arg)
         "calibration_cmd"
     ));
 
-    /* Allocate memory for calibration command messages */
-    static char calibration_cmd_buffer[JSON_BUFFER_SIZE];
+    /* Allocate memory for calibration command messages (HEAP allocation) */
+    char *calibration_cmd_buffer = (char *)malloc(JSON_BUFFER_SIZE);
+    if (!calibration_cmd_buffer) {
+        ESP_LOGE(TAG_UROS, "Failed to allocate calibration buffer");
+        vTaskDelete(NULL);
+        return;
+    }
     g_uros_ctx.calibration_cmd_msg.data.data = calibration_cmd_buffer;
     g_uros_ctx.calibration_cmd_msg.data.size = 0;
     g_uros_ctx.calibration_cmd_msg.data.capacity = JSON_BUFFER_SIZE;
