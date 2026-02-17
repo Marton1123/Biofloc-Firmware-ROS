@@ -769,123 +769,271 @@ def get_sensor_unit(sensor_id):
 
 def read_sensor_voltage(sensor_id, device_id=None):
     """
-    Read current sensor voltage from ROS topic /biofloc/sensor_data
+    Read sensor voltage with scientific stabilization (v3.6.0)
+    
+    METHODOLOGY (per lab professor):
+    - Biological sensors take 3-7 minutes to stabilize
+    - Single instant reading is scientifically INVALID
+    - Uses Sliding Window (30 samples) + Statistical Analysis
+    - Stability criteria: ≥3 minutes AND std dev <0.005V
     
     ARCHITECTURE: Uses subprocess (ros2 topic echo) instead of rclpy.
-    This is CRITICAL — rclpy.init() creates a competing DDS participant that
-    interferes with the micro-ROS Agent, causing port conflicts (errno 98),
-    zombie nodes, and silent Agent death. Subprocess is isolated and safe.
+    This eliminates DDS port conflicts with micro-ROS Agent.
     
     Args:
         sensor_id: Type of sensor ('ph', 'temperature', etc.)
         device_id: Specific device to read from (None = first message)
     
     Returns:
-        float: Sensor voltage in V, or None if read failed
+        float: AVERAGED voltage after stabilization, or None if failed
     """
     try:
         import json as json_lib
         import re
+        import statistics
+        import threading
+        import queue
+        from collections import deque
         
         if device_id:
-            print_info(f"Leyendo voltaje del sensor de {device_id}...")
+            print_info(f"Leyendo voltaje del sensor de {device_id} con estabilización...")
         else:
-            print_info("Leyendo voltaje del sensor...")
+            print_info("Leyendo voltaje del sensor con estabilización...")
         
-        timeout_sec = 20
+        print_info("")
+        print_info("═══════════════════════════════════════════════════════════════")
+        print_info("  ALGORITMO DE ESTABILIZACIÓN DE SENSOR BIOLÓGICO")
+        print_info("═══════════════════════════════════════════════════════════════")
+        print_info("Metodología:")
+        print_info("  • Ventana deslizante de 30 muestras")
+        print_info("  • Cálculo de promedio y desviación estándar en tiempo real")
+        print_info("  • Estabilización exitosa: ≥3 min Y σ <0.005V")
+        print_info("")
+        print_info("Criterios de finalización:")
+        print_info("  ✓ AUTOMÁTICO: Cuando sensor esté estable (≥3min, σ<0.005V)")
+        print_info("  ⚡ MANUAL: Presiona Ctrl+C para forzar captura del promedio")
+        print_info("═══════════════════════════════════════════════════════════════")
+        print_info("")
         
-        # Use subprocess to read from topic — NEVER rclpy
-        cmd = [
-            'bash', '-c',
-            f'source /opt/ros/jazzy/setup.bash && '
-            f'source ~/microros_ws/install/local_setup.bash && '
-            f'timeout {timeout_sec} ros2 topic echo --full-length '
-            f'/biofloc/sensor_data std_msgs/msg/String 2>&1'
-        ]
+        # Sliding window for statistical analysis
+        voltage_window = deque(maxlen=30)  # Last 30 samples
+        start_time = time.time()
+        sample_count = 0
+        stable_readings = 0
+        min_stable_time_sec = 180  # 3 minutes
+        max_std_dev = 0.005  # 0.005V threshold
         
-        print_info(f"Esperando mensaje del ESP32 (timeout: {timeout_sec}s)...")
+        # Message queue for background reading
+        msg_queue = queue.Queue()
+        stop_event = threading.Event()
+        subprocess_proc = None  # CRITICAL: Keep reference for cleanup
         
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=timeout_sec + 5)
-        output = result.stdout
+        def read_messages():
+            """Background thread to continuously read ROS messages"""
+            nonlocal subprocess_proc  # Access parent scope
+            
+            cmd = [
+                'bash', '-c',
+                f'source /opt/ros/jazzy/setup.bash && '
+                f'source ~/microros_ws/install/local_setup.bash && '
+                f'ros2 topic echo --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
+            ]
+            
+            try:
+                subprocess_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, 
+                                                   stderr=subprocess.PIPE, text=True)
+                
+                buffer = ""
+                while not stop_event.is_set():
+                    try:
+                        line = subprocess_proc.stdout.readline()
+                        if not line:
+                            break
+                        buffer += line
+                        
+                        # Check for complete message (ends with ---)
+                        if '---' in buffer:
+                            msg_queue.put(buffer)
+                            buffer = ""
+                    except Exception:
+                        break
+            finally:
+                # CRITICAL: Always cleanup subprocess
+                if subprocess_proc:
+                    try:
+                        subprocess_proc.kill()
+                        subprocess_proc.wait(timeout=2)
+                    except Exception:
+                        pass
         
-        if not output or 'data:' not in output:
-            if device_id:
-                print_error(f"Timeout: No se recibieron mensajes de {device_id} en {timeout_sec}s")
-            else:
-                print_error(f"Timeout: No se recibieron mensajes en {timeout_sec}s")
+        # Start background reader thread
+        reader_thread = threading.Thread(target=read_messages, daemon=True)
+        reader_thread.start()
+        
+        # Wait for first message to confirm topic is active
+        try:
+            first_msg = msg_queue.get(timeout=10)
+        except queue.Empty:
+            stop_event.set()
+            print_error("Timeout: No se recibieron mensajes en 10s")
             print_info("Verifica que:")
             print_info("  - El ESP32 esté conectado y publicando datos")
             print_info("  - El micro-ROS Agent esté activo")
-            print_info("  - El topic /biofloc/sensor_data tenga mensajes")
             return None
         
-        # Split into individual messages and iterate most-recent-first
-        messages = output.split('---')
-        
-        for msg_block in reversed(messages):
-            if 'data:' not in msg_block:
-                continue
-            try:
-                # Extract JSON from data: '...' or data: "..."
-                match = re.search(r"data:\s*['\"](.+?)['\"](?:\n|$)", msg_block, re.DOTALL)
-                if not match:
-                    # Fallback: simple split
-                    json_str = msg_block.split('data:', 1)[1].strip()
-                    if json_str.startswith("'") or json_str.startswith('"'):
-                        json_str = json_str[1:]
-                    if json_str.endswith("'") or json_str.endswith('"'):
-                        json_str = json_str[:-1]
-                else:
-                    json_str = match.group(1)
-                
-                # Clean escape characters
-                json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
-                
+        # Process first message
+        try:
+            match = re.search(r"data:\s*['\"](.+?)['\"](?:\n|$)", first_msg, re.DOTALL)
+            if match:
+                json_str = match.group(1).replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
                 data = json_lib.loads(json_str)
                 msg_device_id = data.get('device_id', 'unknown')
                 
-                # Filter by device_id if specified
-                if device_id and msg_device_id != device_id:
+                if not device_id or msg_device_id == device_id:
+                    sensors_data = data.get('sensors', {})
+                    sensor_data = sensors_data.get(sensor_id, {})
+                    voltage = sensor_data.get('voltage')
+                    
+                    if voltage is not None:
+                        voltage_window.append(voltage)
+                        sample_count += 1
+        except Exception:
+            pass
+        
+        print_info("✓ Sensor detectado, iniciando monitoreo en tiempo real...")
+        print_info("")
+        print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{'Tiempo':>8} | {'Voltaje':>10} | {'Promedio':>10} | {'σ (Std Dev)':>12} | {'Muestras':>10} | {'Estado':>30}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
+        
+        try:
+            while True:
+                # Get next message with short timeout
+                try:
+                    msg_block = msg_queue.get(timeout=1)
+                except queue.Empty:
+                    # No new message, just update display
+                    elapsed = time.time() - start_time
+                    if len(voltage_window) > 0:
+                        current_v = voltage_window[-1]
+                        avg_v = statistics.mean(voltage_window)
+                        std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
+                        
+                        # Check stability
+                        is_stable = (elapsed >= min_stable_time_sec and std_dev < max_std_dev)
+                        
+                        if is_stable:
+                            stable_readings += 1
+                            status = f"{Colors.OKGREEN}ESTABLE{Colors.ENDC} (✓ {stable_readings})"
+                        elif elapsed >= min_stable_time_sec:
+                            status = f"{Colors.WARNING}Esperando σ<{max_std_dev}V{Colors.ENDC}"
+                        else:
+                            remain_sec = int(min_stable_time_sec - elapsed)
+                            status = f"{Colors.OKCYAN}Estabilizando... ({remain_sec}s){Colors.ENDC}"
+                        
+                        print(f"\r{int(elapsed):>7}s | {current_v:>9.4f}V | {avg_v:>9.4f}V | {std_dev:>11.6f}V | {len(voltage_window):>10} | {status:<40}", end='', flush=True)
+                        
+                        # Auto-finish if stable for 3 consecutive readings
+                        if stable_readings >= 3:
+                            print()  # New line
+                            print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
+                            print_success(f"✓ ESTABILIZACIÓN COMPLETADA AUTOMÁTICAMENTE")
+                            print_info(f"  Voltaje promedio: {avg_v:.4f}V")
+                            print_info(f"  Desviación estándar: {std_dev:.6f}V")
+                            print_info(f"  Tiempo total: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
+                            print_info(f"  Muestras procesadas: {len(voltage_window)}")
+                            stop_event.set()
+                            return avg_v
+                    
                     continue
                 
-                # Extract voltage for the requested sensor
-                sensors_data = data.get('sensors', {})
-                sensor_data = sensors_data.get(sensor_id, {})
-                voltage = sensor_data.get('voltage')
-                
-                if voltage is not None:
-                    print_success(f"✓ Voltaje recibido de {msg_device_id}: {voltage}V")
-                    return voltage
+                # Parse new message
+                try:
+                    match = re.search(r"data:\s*['\"](.+?)['\"](?:\n|$)", msg_block, re.DOTALL)
+                    if not match:
+                        continue
                     
-            except (json_lib.JSONDecodeError, KeyError, AttributeError):
-                continue
+                    json_str = match.group(1).replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
+                    data = json_lib.loads(json_str)
+                    msg_device_id = data.get('device_id', 'unknown')
+                    
+                    # Filter by device_id if specified
+                    if device_id and msg_device_id != device_id:
+                        continue
+                    
+                    # Extract voltage
+                    sensors_data = data.get('sensors', {})
+                    sensor_data = sensors_data.get(sensor_id, {})
+                    voltage = sensor_data.get('voltage')
+                    
+                    if voltage is None:
+                        continue
+                    
+                    # Add to sliding window
+                    voltage_window.append(voltage)
+                    sample_count += 1
+                    stable_readings = 0  # Reset stable counter on new reading
+                    
+                except (json_lib.JSONDecodeError, KeyError, AttributeError):
+                    continue
         
-        # Parsed messages but no matching voltage found
-        if device_id:
-            print_error(f"No se encontraron datos de voltaje de {device_id}")
-        else:
-            print_error("No se pudo extraer voltaje de los mensajes recibidos")
-        
-        print_info("Verifica que:")
-        print_info("  - El ESP32 esté conectado y publicando datos")
-        print_info("  - El micro-ROS Agent esté activo")
-        print_info("  - El topic /biofloc/sensor_data tenga mensajes")
-        
-        return None
+        except KeyboardInterrupt:
+            print()  # New line
+            print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
+            print_warning("⚡ Captura MANUAL forzada por usuario (Ctrl+C)")
+            
+            if len(voltage_window) == 0:
+                print_error("No hay muestras disponibles")
+                stop_event.set()
+                return None
+            
+            avg_v = statistics.mean(voltage_window)
+            std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
+            elapsed = time.time() - start_time
+            
+            print_info(f"  Voltaje promedio: {avg_v:.4f}V")
+            print_info(f"  Desviación estándar: {std_dev:.6f}V")
+            print_info(f"  Tiempo transcurrido: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
+            print_info(f"  Muestras procesadas: {len(voltage_window)}")
+            
+            if std_dev >= max_std_dev:
+                print_warning(f"  ⚠ Desviación alta (σ={std_dev:.6f}V > {max_std_dev}V)")
+                print_warning(f"  Recomendación: Esperar más tiempo para mejor precisión")
+            
+            if elapsed < min_stable_time_sec:
+                print_warning(f"  ⚠ Tiempo insuficiente ({int(elapsed)}s < {min_stable_time_sec}s)")
+                print_warning(f"  Recomendación: Idealmente esperar ≥3 minutos")
+            
+            confirm = input(f"\n{Colors.WARNING}¿Usar este promedio de todas formas? (s/N): {Colors.ENDC}").strip().lower()
+            stop_event.set()
+            
+            if confirm == 's':
+                print_success(f"✓ Usando voltaje promedio: {avg_v:.4f}V")
+                return avg_v
+            else:
+                print_info("Medición cancelada")
+                return None
     
-    except subprocess.TimeoutExpired:
-        print_error(f"Timeout: Proceso de lectura no respondió")
-        print_info("Verifica que:")
-        print_info("  - El ESP32 esté conectado y publicando datos")
-        print_info("  - El micro-ROS Agent esté activo")
-        print_info("  - El topic /biofloc/sensor_data tenga mensajes")
-        return None
     except Exception as e:
         print_error(f"Error leyendo voltaje: {e}")
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        # CRITICAL CLEANUP: Prevent zombie subprocess and thread leaks
+        stop_event.set()
+        
+        # Kill subprocess if still running
+        if 'subprocess_proc' in locals() and subprocess_proc:
+            try:
+                subprocess_proc.kill()
+                subprocess_proc.wait(timeout=2)
+            except Exception:
+                pass
+        
+        # Wait for thread to finish (max 3 seconds)
+        if 'reader_thread' in locals() and reader_thread.is_alive():
+            reader_thread.join(timeout=3)
 
 def save_calibration_to_mongodb(calibration_request, calibration_response, device_id=None):
     """

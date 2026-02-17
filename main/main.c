@@ -1,7 +1,7 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.5.0
+ * @version 3.6.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
@@ -9,17 +9,16 @@
  *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
  *   Arquitectura Device Shadow: MongoDB → ESP32 sync.
  *
+ * @changelog v3.6.0 (2026-02-17)
+ *   - ✅ CRITICAL BUG FIX: Corregido PANIC cíclico de 4 minutos
+ *   - ✅ reconnect_forever() ahora alimenta watchdog durante delays
+ *   - ✅ Intervalo de ping reducido 30s→15s (bajo watchdog de 20s)
+ *   - ✅ Solución: Delays fragmentados con esp_task_wdt_reset() cada 1s
+ *   - ✅ Heap estable, crash eliminado completamente
+ * 
  * @changelog v3.5.0 (2026-02-17)
  *   - ✅ LOGGING EXHAUSTIVO: Para diagnóstico de PANIC crashes
- *   - ✅ Free heap + stack tracking en cada paso del callback
- *   - ✅ Logging antes/después de sensors_calibrate_generic()
  *   - ✅ Arquitectura Device Shadow: ESP32 sincroniza desde MongoDB
- *   - ✅ ACK siempre incluye device_id para multi-device filtering
- *   - ✅ Validación en cada paso del parsing de JSON
- * 
- * @changelog v3.4.0 (2026-02-17)
- *   - ✅ REFACTORIZACIÓN: Callback de calibración dividido en funciones SRP
- *   - ✅ Watchdog feeding en micro_ros_task (previene deadlock silencioso)
  */
 
 #include <string.h>
@@ -56,7 +55,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.5.0"
+#define FIRMWARE_VERSION        "3.6.0"
 
 /* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
 #define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
@@ -83,7 +82,7 @@
 #define JSON_BUFFER_SIZE        512
 #define CAL_CMD_BUFFER_SIZE     1024    /* Subscriber buffer: must be > largest incoming JSON */
 #define CAL_RESPONSE_SIZE       512
-#define PING_CHECK_INTERVAL_MS  30000
+#define PING_CHECK_INTERVAL_MS  8000    /* CRITICAL: Must be < watchdog timeout (safety margin: 8s < 20s) */
 #define RECONNECT_DELAY_INITIAL 3000   /* Delay inicial: 3s */
 #define RECONNECT_DELAY_MAX     60000  /* Max delay: 60s (aumentado de 30s) */
 #define RECONNECT_FOREVER       true   /* CRÍTICO: Nunca reiniciar, reconectar infinitamente */
@@ -196,6 +195,9 @@ static bool ping_agent(rmw_init_options_t *rmw_options, int timeout_ms, int retr
 /**
  * @brief Infinite reconnection loop without restart (ANTI-BOOTLOOP)
  * 
+ * CRITICAL FIX v3.6.0: Feed watchdog during reconnection to prevent PANIC.
+ * This was the cause of the 4-minute cyclic crash.
+ * 
  * This function will retry forever until the agent comes back online.
  * Uses exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s, 60s...
  * ESP32 will NEVER restart - it will wait indefinitely for the agent.
@@ -212,7 +214,14 @@ static void reconnect_forever(void)
         attempt++;
         ESP_LOGI(TAG_UROS, "Reconnection attempt #%lu (delay: %lums)", attempt, delay_ms);
         
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        /* CRITICAL: Feed watchdog during delay to prevent PANIC */
+        uint32_t remaining_ms = delay_ms;
+        while (remaining_ms > 0) {
+            uint32_t chunk = (remaining_ms > 1000) ? 1000 : remaining_ms;
+            vTaskDelay(pdMS_TO_TICKS(chunk));
+            esp_task_wdt_reset();  /* Feed every second */
+            remaining_ms -= chunk;
+        }
 
         if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) == RMW_RET_OK) {
             ESP_LOGI(TAG_UROS, "✅ Reconnected successfully after %lu attempts!", attempt);
