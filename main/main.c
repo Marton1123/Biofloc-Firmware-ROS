@@ -38,6 +38,8 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <std_msgs/msg/string.h>
+#include <micro_ros_utilities/type_utilities.h>
+#include <micro_ros_utilities/string_utilities.h>
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
 #include <rmw_microros/rmw_microros.h>
@@ -74,6 +76,7 @@
 #define SENSOR_TASK_STACK       8192
 #define SENSOR_TASK_PRIO        4
 #define JSON_BUFFER_SIZE        512
+#define CAL_CMD_BUFFER_SIZE     1024    /* Subscriber buffer: must be > largest incoming JSON */
 #define CAL_RESPONSE_SIZE       512
 #define PING_CHECK_INTERVAL_MS  30000
 #define RECONNECT_DELAY_INITIAL 3000   /* Delay inicial: 3s */
@@ -331,9 +334,21 @@ static void sensor_task(void *arg)
 static void calibration_callback(const void *msgin)
 {
     const std_msgs__msg__String *msg = (const std_msgs__msg__String *)msgin;
-    char response_buffer[CAL_RESPONSE_SIZE];
-    
-    ESP_LOGI(TAG_UROS, "Received calibration command: %s", msg->data.data);
+    static char response_buffer[CAL_RESPONSE_SIZE];  /* static: reduce stack pressure */
+
+    /* === SAFETY GATE: Validate message before ANY access === */
+    if (!msg || !msg->data.data || msg->data.size == 0) {
+        ESP_LOGE(TAG_UROS, "SAFETY: NULL or empty calibration message received");
+        snprintf(response_buffer, sizeof(response_buffer),
+                 "{\"status\":\"error\",\"message\":\"Empty or NULL message received\"}");
+        goto send_response;
+    }
+
+    /* Diagnostics: log free heap to detect memory pressure */
+    ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+    ESP_LOGI(TAG_UROS, "Received calibration command (%d bytes): %.120s%s",
+             (int)msg->data.size, msg->data.data,
+             msg->data.size > 120 ? "..." : "");
 
     /* Parse JSON */
     cJSON *json = cJSON_Parse((const char *)msg->data.data);
@@ -596,16 +611,26 @@ static void micro_ros_task(void *arg)
         "calibration_cmd"
     ));
 
-    /* Allocate memory for calibration command messages (HEAP allocation) */
-    char *calibration_cmd_buffer = (char *)malloc(JSON_BUFFER_SIZE);
-    if (!calibration_cmd_buffer) {
-        ESP_LOGE(TAG_UROS, "Failed to allocate calibration buffer");
+    /* Allocate memory for calibration command messages using micro_ros_utilities
+     * CRITICAL: Manual malloc is NOT compatible with XRCE-DDS deserialization.
+     * micro_ros_utilities_create_message_memory() properly initializes all
+     * internal structures that the XRCE-DDS middleware expects.
+     * Buffer size: 1024 bytes to safely handle 3-5 point calibration JSONs.
+     */
+    static micro_ros_utilities_memory_conf_t cal_cmd_conf = {0};
+    cal_cmd_conf.max_string_capacity = CAL_CMD_BUFFER_SIZE;
+
+    bool mem_ok = micro_ros_utilities_create_message_memory(
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        &g_uros_ctx.calibration_cmd_msg,
+        cal_cmd_conf
+    );
+    if (!mem_ok) {
+        ESP_LOGE(TAG_UROS, "FATAL: Failed to allocate calibration cmd buffer (%d bytes)", CAL_CMD_BUFFER_SIZE);
         vTaskDelete(NULL);
         return;
     }
-    g_uros_ctx.calibration_cmd_msg.data.data = calibration_cmd_buffer;
-    g_uros_ctx.calibration_cmd_msg.data.size = 0;
-    g_uros_ctx.calibration_cmd_msg.data.capacity = JSON_BUFFER_SIZE;
+    ESP_LOGI(TAG_UROS, "Calibration cmd buffer: %d bytes (via micro_ros_utilities)", CAL_CMD_BUFFER_SIZE);
 
     ESP_LOGI(TAG_UROS, "Initializing executor (2 handles)");
     RCCHECK(rclc_executor_init(&g_uros_ctx.executor,
@@ -655,6 +680,11 @@ static void micro_ros_task(void *arg)
     }
 
     /* Cleanup (unreachable but good practice) */
+    micro_ros_utilities_destroy_message_memory(
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        &g_uros_ctx.calibration_cmd_msg,
+        cal_cmd_conf
+    );
     RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.calibration_response_publisher, &g_uros_ctx.node));
     RCSOFTCHECK(rcl_subscription_fini(&g_uros_ctx.calibration_subscriber, &g_uros_ctx.node));
     RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.sensor_publisher, &g_uros_ctx.node));

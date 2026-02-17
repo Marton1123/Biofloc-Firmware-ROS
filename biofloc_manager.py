@@ -425,7 +425,7 @@ def calibrate_remote():
         })
         
         print_info(f"Reseteando calibración de {sensor_name}...")
-        result = publish_calibration_command(cmd_json)
+        result = publish_calibration_command(cmd_json, device_id=selected_device)
         
         if result:
             print_success(f"✓ Calibración de {sensor_name} reseteada a valores de fábrica")
@@ -442,7 +442,7 @@ def calibrate_remote():
         })
         
         print_info(f"Consultando calibración actual de {sensor_name}...")
-        result = publish_calibration_command(cmd_json)
+        result = publish_calibration_command(cmd_json, device_id=selected_device)
         
         if result:
             print_success(f"✓ Consulta completada (ver respuesta en /biofloc/calibration_status)")
@@ -532,7 +532,7 @@ def calibrate_remote():
     })
     
     print_info("Enviando comando de calibración al ESP32...")
-    result = publish_calibration_command(cmd_json)
+    result = publish_calibration_command(cmd_json, device_id=selected_device)
     
     if result:
         print_success(f"✓ Calibración de {sensor_name} completada exitosamente")
@@ -892,13 +892,15 @@ def read_sensor_voltage(sensor_id, device_id=None):
         traceback.print_exc()
         return None
 
-def save_calibration_to_mongodb(calibration_request, calibration_response):
+def save_calibration_to_mongodb(calibration_request, calibration_response, device_id=None):
     """
     Save calibration data to MongoDB devices collection (Digital Twin)
+    ONLY called after ESP32 confirms successful NVS save via ACK.
     
     Args:
         calibration_request: Original calibration command (dict)
         calibration_response: Response from ESP32 with calculated parameters (dict)
+        device_id: ESP32 device ID string (e.g. 'biofloc_esp32_c8e0')
     
     Returns:
         bool: True if saved successfully, False otherwise
@@ -916,6 +918,10 @@ def save_calibration_to_mongodb(calibration_request, calibration_response):
             print_warning("MONGODB_URI no configurado - calibración solo guardada en ESP32")
             return False
         
+        if not device_id:
+            print_warning("Device ID no proporcionado - no se puede guardar en MongoDB")
+            return False
+        
         # Connect to MongoDB
         client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client[mongodb_database]
@@ -923,15 +929,6 @@ def save_calibration_to_mongodb(calibration_request, calibration_response):
         
         # Verify connection
         client.admin.command('ping')
-        
-        # Get active device ID
-        device_id = discover_active_devices()
-        if not device_id or len(device_id) == 0:
-            print_warning("No se pudo detectar el dispositivo activo")
-            return False
-        
-        # Use first device if multiple found
-        device_id = device_id[0] if isinstance(device_id, list) else device_id
         
         # Prepare calibration document
         sensor_type = calibration_request.get('sensor')
@@ -988,16 +985,17 @@ def save_calibration_to_mongodb(calibration_request, calibration_response):
         except:
             pass
 
-def publish_calibration_command(json_cmd):
+def publish_calibration_command(json_cmd, device_id=None):
     """
     Publish calibration command to /biofloc/calibration_cmd topic
-    AND save to MongoDB as Digital Twin backup
+    AND save to MongoDB as Digital Twin backup (only on confirmed ACK)
     
     Args:
         json_cmd: JSON string with calibration command
+        device_id: Device ID string for MongoDB save (optional)
     
     Returns:
-        bool: True if command was published successfully
+        bool: True ONLY if ESP32 confirmed success via ACK
     """
     try:
         # Parse calibration data
@@ -1021,18 +1019,18 @@ def publish_calibration_command(json_cmd):
         
         if result.returncode == 0:
             print_info("✓ Comando enviado al ESP32")
-            print_info("Esperando respuesta...")
+            print_info("Esperando confirmación (ACK) del ESP32...")
             time.sleep(2)
             
-            # Try to read response
+            # Wait for ESP32 ACK response
             cmd_response = [
                 'bash', '-c',
                 'source /opt/ros/jazzy/setup.bash && '
                 'source ~/microros_ws/install/local_setup.bash && '
-                'timeout 8 ros2 topic echo --once --full-length /biofloc/calibration_status std_msgs/msg/String'
+                'timeout 10 ros2 topic echo --once --full-length /biofloc/calibration_status std_msgs/msg/String'
             ]
             
-            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=10)
+            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=15)
             
             if response_result.returncode == 0:
                 output = response_result.stdout.strip()
@@ -1041,13 +1039,13 @@ def publish_calibration_command(json_cmd):
                     if response_data.startswith("'") or response_data.startswith('"'):
                         response_data = response_data[1:-1]
                     
-                    print_info(f"Respuesta: {response_data}")
+                    print_info(f"Respuesta ESP32: {response_data}")
                     
-                    # Parse response
+                    # Parse ACK response
                     try:
                         response_json = json_lib.loads(response_data)
                         if response_json.get('status') == 'success':
-                            print_success(f"✓ {response_json.get('message', 'Éxito')}")
+                            print_success(f"✓ ACK confirmado: {response_json.get('message', 'Éxito')}")
                             if 'slope' in response_json:
                                 print_info(f"  Slope: {response_json['slope']:.6f}")
                             if 'offset' in response_json:
@@ -1055,26 +1053,32 @@ def publish_calibration_command(json_cmd):
                             if 'r_squared' in response_json:
                                 print_info(f"  R²: {response_json['r_squared']:.4f}")
                             
-                            # ===== DIGITAL TWIN: Save to MongoDB =====
-                            save_calibration_to_mongodb(cal_data, response_json)
+                            # ===== DIGITAL TWIN: Save ONLY after confirmed ACK =====
+                            save_calibration_to_mongodb(cal_data, response_json, device_id=device_id)
                             
                             return True
                         else:
-                            print_error(f"✗ {response_json.get('message', 'Error desconocido')}")
+                            print_error(f"✗ ESP32 reportó error: {response_json.get('message', 'Error desconocido')}")
                             return False
-                    except json.JSONDecodeError:
-                        print_warning("Respuesta recibida pero no se pudo parsear")
-                        return True
+                    except json_lib.JSONDecodeError:
+                        print_warning("Respuesta recibida pero JSON inválido - calibración NO confirmada")
+                        return False
+                else:
+                    print_error("✗ Respuesta vacía del ESP32 - calibración NO confirmada")
+                    return False
             else:
-                print_warning("No se recibió respuesta del ESP32 (timeout)")
-                print_info("El comando podría haberse procesado de todas formas")
-                return True
-            
-            return True
+                print_error("✗ TIMEOUT: No se recibió ACK del ESP32")
+                print_error("  El ESP32 pudo haber sufrido un PANIC y reiniciado")
+                print_info("  Verifica los logs del ESP32 con: idf.py monitor")
+                print_info("  La calibración NO se guardó (ni en NVS ni en MongoDB)")
+                return False
         else:
             print_error(f"Error publicando comando: {result.stderr}")
             return False
             
+    except subprocess.TimeoutExpired:
+        print_error("✗ TIMEOUT publicando comando ROS 2")
+        return False
     except Exception as e:
         print_error(f"Error en calibración remota: {e}")
         return False
