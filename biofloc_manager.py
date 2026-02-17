@@ -764,7 +764,7 @@ def get_sensor_unit(sensor_id):
 
 def read_sensor_voltage(sensor_id, device_id=None):
     """
-    Read current sensor voltage from ROS topic /biofloc/sensor_data
+    Read current sensor voltage from ROS topic /biofloc/sensor_data using rclpy
     
     Args:
         sensor_id: Type of sensor ('ph', 'temperature', etc.)
@@ -775,108 +775,111 @@ def read_sensor_voltage(sensor_id, device_id=None):
     """
     try:
         import json
+        import rclpy
+        from rclpy.node import Node
+        from std_msgs.msg import String
         
         if device_id:
-            print_info(f"Escuchando voltaje de {device_id}...")
+            print_info(f"Leyendo voltaje del sensor de {device_id}...")
         else:
-            print_info("Escuchando topic /biofloc/sensor_data...")
+            print_info("Leyendo voltaje del sensor...")
         
-        print_info("Esperando mensaje del ESP32 (puede tomar hasta 20 segundos)...")
+        # Initialize rclpy if not already initialized
+        try:
+            rclpy.init()
+        except RuntimeError:
+            # Already initialized
+            pass
         
-        # ESP32 publishes every 4 seconds, so wait up to 20s to be safe
-        # --full-length prevents ROS 2 from truncating long JSON messages
-        cmd = [
-            'bash', '-c',
-            'source /opt/ros/jazzy/setup.bash && '
-            'source ~/microros_ws/install/local_setup.bash && '
-            'timeout 20 ros2 topic echo --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
-        ]
+        # Create a temporary node for reading sensor data
+        class VoltageReader(Node):
+            def __init__(self):
+                super().__init__('voltage_reader_temp')
+                self.voltage = None
+                self.device_found = False
+                self.subscription = self.create_subscription(
+                    String,
+                    '/biofloc/sensor_data',
+                    self.sensor_callback,
+                    10
+                )
+                self.target_sensor = sensor_id
+                self.target_device = device_id
+                self.get_logger().info(f'Escuchando /biofloc/sensor_data para {sensor_id}...')
+            
+            def sensor_callback(self, msg):
+                try:
+                    # Parse JSON from message
+                    data = json.loads(msg.data)
+                    
+                    # Check if this is the device we want (if specified)
+                    msg_device_id = data.get('device_id', 'unknown')
+                    
+                    if self.target_device and msg_device_id != self.target_device:
+                        # Not the device we want, skip
+                        return
+                    
+                    # Extract voltage based on sensor type
+                    sensors_data = data.get('sensors', {})
+                    sensor_data = sensors_data.get(self.target_sensor, {})
+                    voltage = sensor_data.get('voltage')
+                    
+                    if voltage is not None:
+                        self.voltage = voltage
+                        self.device_found = True
+                        self.get_logger().info(f'✓ Voltaje recibido de {msg_device_id}: {voltage}V')
+                    
+                except json.JSONDecodeError as e:
+                    self.get_logger().warning(f'Error parseando JSON: {e}')
+                except Exception as e:
+                    self.get_logger().error(f'Error en callback: {e}')
         
-        # If device_id is specified, we may need to read multiple messages
-        max_attempts = 10 if device_id else 1
+        # Create reader node
+        reader = VoltageReader()
         
-        for attempt in range(max_attempts):
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-            
-            # Debug output
-            if result.returncode != 0:
-                if attempt == max_attempts - 1:  # Last attempt
-                    print_warning(f"Comando falló con código {result.returncode}")
-                    if result.stderr:
-                        print_warning(f"Error: {result.stderr[:200]}")
-                    if result.stdout:
-                        print_warning(f"Output: {result.stdout[:200]}")
-                continue
-            
-            # Parse output: "data: {...json...}"
-            output = result.stdout.strip()
-            
-            if not output:
-                if attempt == max_attempts - 1:
-                    print_warning("No se recibió salida del comando")
-                continue
-                
-            if 'data:' not in output:
-                if attempt == max_attempts - 1:
-                    print_warning(f"Formato inesperado. Output: {output[:200]}")
-                continue
-            
-            # Extract JSON string after "data:"
-            json_str = output.split('data:', 1)[1].strip()
-            
-            # Remove outer quotes if present (ROS wraps the string)
-            if json_str.startswith("'") or json_str.startswith('"'):
-                json_str = json_str[1:-1]
-            
-            # CRITICAL: Remove control characters (newlines, tabs) that break JSON parsing
-            # ROS topic echo may return pretty-printed JSON with newlines
-            json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
-            
-            # Parse JSON
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError as je:
-                if attempt == max_attempts - 1:
-                    print_warning(f"Error parseando JSON: {je}")
-                    print_warning(f"JSON string: {json_str[:200]}")
-                continue
-            
-            # Check if this is the device we want
-            msg_device_id = data.get('device_id', 'unknown')
-            
-            if device_id and msg_device_id != device_id:
-                # Not the device we want, try again
-                print_info(f"  Recibido mensaje de {msg_device_id}, esperando {device_id}...")
-                time.sleep(2)  # Wait a bit before next attempt
-                continue
-            
-            # Extract voltage based on sensor type
-            if sensor_id == 'ph':
-                voltage = data.get('sensors', {}).get('ph', {}).get('voltage')
-            elif sensor_id == 'temperature':
-                voltage = data.get('sensors', {}).get('temperature', {}).get('voltage')
-            else:
-                print_warning(f"Tipo de sensor desconocido: {sensor_id}")
-                return None
-            
-            if voltage is None:
-                print_warning(f"No se encontró voltaje para sensor {sensor_id} en JSON")
-                print_warning(f"Datos recibidos: {json_str[:200]}")
-                return None
-            
-            print_success(f"✓ Voltaje recibido de {msg_device_id}: {voltage}V")
-            return voltage
+        # Spin with timeout (15 seconds = enough for 3-4 messages at 4s interval)
+        timeout_sec = 15.0
+        start_time = time.time()
         
-        # If we get here with device_id, we never found the right device
+        print_info(f"Esperando mensaje del ESP32 (timeout: {int(timeout_sec)}s)...")
+        
+        while (time.time() - start_time) < timeout_sec:
+            # Spin once to process callbacks
+            rclpy.spin_once(reader, timeout_sec=0.5)
+            
+            # Check if we got the voltage
+            if reader.device_found:
+                voltage = reader.voltage
+                reader.destroy_node()
+                print_success(f"✓ Voltaje recibido: {voltage}V")
+                return voltage
+            
+            # Small progress indicator
+            elapsed = int(time.time() - start_time)
+            if elapsed > 0 and elapsed % 3 == 0:
+                print(".", end='', flush=True)
+        
+        print()  # New line after dots
+        
+        # Timeout reached
+        reader.destroy_node()
+        
         if device_id:
-            print_error(f"No se recibieron mensajes de {device_id} en {max_attempts} intentos")
-            print_info("Verifica que el dispositivo esté conectado y publicando")
+            print_error(f"Timeout: No se recibieron mensajes de {device_id} en {int(timeout_sec)}s")
+        else:
+            print_error(f"Timeout: No se recibieron mensajes en {int(timeout_sec)}s")
+        
+        print_info("Verifica que:")
+        print_info("  - El ESP32 esté conectado y publicando datos")
+        print_info("  - El micro-ROS Agent esté activo")
+        print_info("  - El topic /biofloc/sensor_data tenga mensajes")
         
         return None
         
-    except subprocess.TimeoutExpired:
-        print_error("Timeout: No se recibieron datos en 25 segundos")
-        print_info("Verifica que el ESP32 esté publicando: ros2 topic hz /biofloc/sensor_data")
+    except ImportError as e:
+        print_error(f"Error importando rclpy: {e}")
+        print_error("Asegúrate de que ROS 2 Jazzy esté instalado y sourced")
+        print_info("Ejecuta: source /opt/ros/jazzy/setup.bash")
         return None
     except Exception as e:
         print_error(f"Error leyendo voltaje: {e}")
