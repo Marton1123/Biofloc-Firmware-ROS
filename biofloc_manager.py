@@ -1691,27 +1691,207 @@ def check_esp32_connectivity():
         print("  4. Revisa el monitor serial del ESP32 para errores de conexión")
 
 def quick_adjust_ph():
-    """Quick pH calibration adjustment"""
-    print_header("Ajuste Rápido de pH")
+    """
+    Quick pH calibration adjustment with Device Shadow architecture (v3.5.0)
     
-    print_info("Calibración actual: slope=2.559823, offset=0.469193")
-    print_info("Esto permite ajuste manual de la calibración de pH")
+    ARCHITECTURE:
+    1. User selects device (multi-device support)
+    2. User enters slope/offset manually
+    3. Python saves to MongoDB FIRST (Cloud Shadow = Source of Truth)
+    4. Then publishes command to ESP32 for sync
+    5. ESP32 applies + persists to NVS + sends ACK
+    
+    This inverts the old flow: MongoDB is now authoritative, ESP32 syncs FROM it.
+    """
+    print_header("Ajuste Rápido de pH - Multi-Device")
+    
+    print_info("Modo Device Shadow: MongoDB → ESP32")
+    print_info("Los valores se guardan primero en la nube, luego se sincronizan al dispositivo")
+    print()
+    
+    # ── Step 1: Device selection (same as Option 7) ──
+    if not check_process_running('micro_ros_agent'):
+        print_error("El micro-ROS Agent NO está corriendo")
+        print_info("Inicia el Agent primero con la opción [1] del menú")
+        return
+    
+    print_info("Detectando dispositivos ESP32 activos...")
+    devices = discover_active_devices(duration_seconds=10)
+    
+    if not devices:
+        print_error("No se detectaron dispositivos ESP32 en la red")
+        print_info("Verifica que los ESP32 estén encendidos y publicando")
+        return
+    
+    print()
+    print(f"{Colors.BOLD}Dispositivos disponibles:{Colors.ENDC}")
+    device_list = list(devices.keys())
+    for idx, device_id in enumerate(device_list, start=1):
+        data = devices[device_id]
+        location = data.get('location', 'unknown')
+        sensors = data.get('sensors', {})
+        ph = sensors.get('ph', {}).get('value', 'N/A')
+        print(f"  [{idx}] {device_id}")
+        print(f"      Ubicación: {location}, pH actual: {ph}")
+    print("  [0] Cancelar")
+    print()
+    
+    device_choice = input(f"{Colors.OKBLUE}Selecciona dispositivo: {Colors.ENDC}").strip()
+    
+    try:
+        device_idx = int(device_choice)
+        if device_idx == 0:
+            print_info("Operación cancelada")
+            return
+        if device_idx < 1 or device_idx > len(device_list):
+            print_error("Opción inválida")
+            return
+        
+        selected_device = device_list[device_idx - 1]
+        print_success(f"✓ Dispositivo seleccionado: {selected_device}")
+        print()
+    except ValueError:
+        print_error("Ingresa un número válido")
+        return
+    
+    # ── Step 2: Get calibration values from user ──
+    print_info("Ingresa los valores de calibración manual")
+    print_info("(Estos valores se aplicarán a la ecuación: pH = slope * V + offset)")
     print()
     
     try:
-        slope = float(input("Ingresa el slope de pH (o Enter para mantener actual): ").strip() or "2.559823")
-        offset = float(input("Ingresa el offset de pH (o Enter para mantener actual): ").strip() or "0.469193")
+        slope_input = input("Slope (Enter para 2.56): ").strip()
+        slope = float(slope_input) if slope_input else 2.56
         
-        print()
-        print_info(f"Se establecerá: slope={slope:.6f}, offset={offset:.3f}")
-        
-        choice = input("¿Continuar? (s/N): ").strip().lower()
-        if choice == 's':
-            update_calibration('ph', slope=slope, offset=offset)
-        else:
-            print_info("Cancelado")
+        offset_input = input("Offset (Enter para 0.47): ").strip()
+        offset = float(offset_input) if offset_input else 0.47
     except ValueError:
         print_error("Formato de número inválido")
+        return
+    
+    print()
+    print(f"{Colors.BOLD}═══ Resumen ═══{Colors.ENDC}")
+    print(f"Dispositivo: {selected_device}")
+    print(f"Sensor: pH")
+    print(f"Slope: {slope:.6f}")
+    print(f"Offset: {offset:.6f}")
+    print(f"Ecuación: pH = {slope:.3f} * V + {offset:.3f}")
+    print()
+    
+    confirm = input(f"{Colors.WARNING}¿Aplicar estos valores? (S/n): {Colors.ENDC}").strip().lower()
+    if confirm == 'n':
+        print_info("Operación cancelada")
+        return
+    
+    # ── Step 3: CLOUD-FIRST - Save to MongoDB (Device Shadow) ──
+    print_info("Guardando en MongoDB (Device Shadow)...")
+    
+    try:
+        from pymongo import MongoClient
+        from pymongo.errors import ConnectionFailure
+        
+        mongodb_uri = os.getenv('MONGODB_URI')
+        if not mongodb_uri:
+            print_warning("MONGODB_URI no configurado - solo se aplicará localmente en ESP32")
+            mongodb_saved = False
+        else:
+            try:
+                client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+                db = client[os.getenv('MONGODB_DATABASE', 'SistemasLab')]
+                devices_col = db[os.getenv('MONGODB_COLLECTION_DEVICES', 'devices')]
+                
+                client.admin.command('ping')
+                
+                # Build calibration document
+                cal_doc = {
+                    'fecha': datetime.utcnow().isoformat() + 'Z',
+                    'slope': slope,
+                    'offset': offset,
+                    'r_squared': 0.0,  # Manual calibration has no R²
+                    'points': [],      # No calibration points for manual adjustment
+                    'num_points': 0,
+                    'method': 'manual_quick_adjust',
+                    'status': 'pending_sync',  # Will become 'synced' after ESP32 ACK
+                    'message': 'Manual adjustment via quick calibration'
+                }
+                
+                result = devices_col.update_one(
+                    {'_id': selected_device},
+                    {
+                        '$set': {
+                            'calibracion.ph': cal_doc,
+                            'ultima_calibracion': datetime.utcnow().isoformat() + 'Z'
+                        }
+                    },
+                    upsert=False
+                )
+                
+                if result.modified_count > 0 or result.matched_count > 0:
+                    print_success("✓ Valores guardados en MongoDB (Device Shadow)")
+                    mongodb_saved = True
+                else:
+                    print_warning(f"Dispositivo {selected_device} no encontrado en MongoDB")
+                    print_info("Los valores se aplicarán solo en el ESP32")
+                    mongodb_saved = False
+                
+                client.close()
+                
+            except ConnectionFailure:
+                print_error("✗ No se pudo conectar a MongoDB")
+                print_info("Los valores se aplicarán solo en el ESP32")
+                mongodb_saved = False
+            except Exception as e:
+                print_error(f"Error guardando en MongoDB: {e}")
+                mongodb_saved = False
+    except ImportError:
+        print_warning("pymongo no instalado - valores solo en ESP32")
+        mongodb_saved = False
+    
+    # ── Step 4: Publish command to ESP32 for sync ──
+    print_info("Enviando comando de sincronización al ESP32...")
+    
+    import json as json_lib
+    cmd_json = json_lib.dumps({
+        "sensor": "ph",
+        "action": "calibrate",
+        "points": [
+            {"voltage": 1.0, "value": slope * 1.0 + offset},
+            {"voltage": 2.0, "value": slope * 2.0 + offset}
+        ]
+    })
+    
+    # Use the existing publish_calibration_command function
+    success = publish_calibration_command(cmd_json, device_id=selected_device)
+    
+    if success:
+        print_success("✓ Calibración aplicada exitosamente")
+        print_info("El dispositivo confirmó la recepción y aplicó los valores")
+        
+        # Update MongoDB status to 'synced' if we saved there
+        if mongodb_saved:
+            try:
+                client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+                db = client[os.getenv('MONGODB_DATABASE', 'SistemasLab')]
+                devices_col = db[os.getenv('MONGODB_COLLECTION_DEVICES', 'devices')]
+                
+                devices_col.update_one(
+                    {'_id': selected_device},
+                    {'$set': {'calibracion.ph.status': 'synced'}}
+                )
+                
+                print_success("✓ Estado actualizado en MongoDB: synced")
+                client.close()
+            except Exception:
+                pass  # Non-fatal
+    else:
+        print_error("✗ El ESP32 no confirmó la calibración")
+        print_info("Posibles causas:")
+        print_info("  - ESP32 sufrió un PANIC al procesar el comando")
+        print_info("  - Conexión micro-ROS inestable")
+        print_info("  - Agent desconectado")
+        print_info("")
+        print_info("Los valores ESTÁN guardados en MongoDB (Device Shadow)")
+        print_info("Puedes reintentar la sincronización cuando el ESP32 esté estable")
 
 def show_menu():
     """Display main menu"""
@@ -1730,7 +1910,7 @@ def show_menu():
     print("  [7] ⭐ Calibración Remota Multi-Device (Recomendado)")
     print("  [8] Calibrar Sensor pH (3 puntos, USB)")
     print("  [9] Calibrar Sensor Temperatura (3 puntos, USB)")
-    print("  [10] Ajuste Rápido pH (valores manuales)")
+    print("  [10] ⚡ Ajuste Rápido pH Multi-Device (valores manuales)")
     print("  [11] Ajuste Rápido Temperatura (-1.6°C)")
     print()
     

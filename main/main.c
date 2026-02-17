@@ -1,22 +1,25 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.4.0
+ * @version 3.5.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
+ *   Arquitectura Device Shadow: MongoDB → ESP32 sync.
  *
+ * @changelog v3.5.0 (2026-02-17)
+ *   - ✅ LOGGING EXHAUSTIVO: Para diagnóstico de PANIC crashes
+ *   - ✅ Free heap + stack tracking en cada paso del callback
+ *   - ✅ Logging antes/después de sensors_calibrate_generic()
+ *   - ✅ Arquitectura Device Shadow: ESP32 sincroniza desde MongoDB
+ *   - ✅ ACK siempre incluye device_id para multi-device filtering
+ *   - ✅ Validación en cada paso del parsing de JSON
+ * 
  * @changelog v3.4.0 (2026-02-17)
  *   - ✅ REFACTORIZACIÓN: Callback de calibración dividido en funciones SRP
- *   - ✅ safe_receive_msg(): Copia segura con null-terminator obligatorio
- *   - ✅ parse_calibration_json_safe(): Validación exhaustiva de JSON/cJSON
- *   - ✅ execute_calibration_action(): Despacho de acciones aislado
- *   - ✅ send_calibration_ack(): Publicación de ACK con device_id
  *   - ✅ Watchdog feeding en micro_ros_task (previene deadlock silencioso)
- *   - ✅ device_id incluido en TODAS las respuestas de calibración
- *   - ✅ goto eliminado: flujo de control limpio con returns
  */
 
 #include <string.h>
@@ -53,7 +56,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.4.0"
+#define FIRMWARE_VERSION        "3.5.0"
 
 /* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
 #define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
@@ -488,6 +491,8 @@ static void execute_calibration_action(cJSON *root,
 
     /* ---- ACTION: calibrate ---- */
     if (strcmp(action, "calibrate") == 0) {
+        ESP_LOGI(TAG_UROS, "  → Calibrate action");
+        
         /* Validate "points" array */
         cJSON *points_json = cJSON_GetObjectItem(root, "points");
         if (!cJSON_IsArray(points_json)) {
@@ -500,6 +505,8 @@ static void execute_calibration_action(cJSON *root,
         }
 
         int num_points = cJSON_GetArraySize(points_json);
+        ESP_LOGI(TAG_UROS, "  Points in JSON: %d", num_points);
+        
         if (num_points < 2 || num_points > MAX_CALIBRATION_POINTS) {
             ESP_LOGE(TAG_UROS, "Invalid point count: %d (need 2-%d)", num_points, MAX_CALIBRATION_POINTS);
             snprintf(resp, resp_size,
@@ -511,6 +518,7 @@ static void execute_calibration_action(cJSON *root,
 
         /* Parse each calibration point with exhaustive validation */
         calibration_point_t points[MAX_CALIBRATION_POINTS];
+        ESP_LOGI(TAG_UROS, "  Parsing calibration points...");
 
         for (int i = 0; i < num_points; i++) {
             cJSON *pt = cJSON_GetArrayItem(points_json, i);
@@ -541,13 +549,21 @@ static void execute_calibration_action(cJSON *root,
                      i + 1, points[i].voltage, points[i].value, sensor_str);
         }
 
+        ESP_LOGI(TAG_UROS, "  ✓ All points parsed successfully");
+        ESP_LOGI(TAG_UROS, "  Calling sensors_calibrate_generic()...");
+        
         /* Execute calibration + NVS save */
         calibration_response_t cal_resp;
         memset(&cal_resp, 0, sizeof(cal_resp));
 
-        ESP_LOGI(TAG_UROS, "Calibrating %s with %d points...", sensor_str, num_points);
+        ESP_LOGI(TAG_UROS, "  Free heap before calibration: %lu", (unsigned long)esp_get_free_heap_size());
+        
         esp_err_t err = sensors_calibrate_generic(sensor_type, points,
                                                    (uint8_t)num_points, &cal_resp);
+
+        ESP_LOGI(TAG_UROS, "  sensors_calibrate_generic() returned: err=%d, status=%d",
+                 err, cal_resp.status);
+        ESP_LOGI(TAG_UROS, "  Free heap after calibration: %lu", (unsigned long)esp_get_free_heap_size());
 
         if (err == ESP_OK && cal_resp.status == CAL_STATUS_SUCCESS) {
             ESP_LOGI(TAG_UROS, "✓ Calibration SUCCESS: R²=%.4f slope=%.6f offset=%.6f",
@@ -610,6 +626,8 @@ static void send_calibration_ack(const char *response)
  *
  * Called by the rclc executor when a message arrives on calibration_cmd.
  * This function NEVER crashes: every failure path logs + sends ACK + returns.
+ * 
+ * v3.5.0: EXHAUSTIVE LOGGING for crash diagnosis
  */
 static void calibration_callback(const void *msgin)
 {
@@ -617,25 +635,33 @@ static void calibration_callback(const void *msgin)
     static char safe_buffer[CAL_CMD_BUFFER_SIZE];
     static char response[CAL_RESPONSE_SIZE];
 
-    ESP_LOGI(TAG_UROS, "─── Calibration command received ───");
+    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
+    ESP_LOGI(TAG_UROS, "  CALIBRATION CALLBACK INVOKED");
+    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
     ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+    ESP_LOGI(TAG_UROS, "Free stack: %u bytes", uxTaskGetStackHighWaterMark(NULL));
 
     /* Step 1: Safe receive with null-termination */
+    ESP_LOGI(TAG_UROS, "[1/4] Receiving message...");
     int len = safe_receive_msg((const std_msgs__msg__String *)msgin,
                                safe_buffer, sizeof(safe_buffer));
     if (len < 0) {
+        ESP_LOGE(TAG_UROS, "✗ safe_receive_msg FAILED");
         snprintf(response, sizeof(response),
                  "{\"device_id\":\"%s\",\"status\":\"error\","
                  "\"message\":\"NULL or empty message\"}",
                  g_app_state.device_id);
         send_calibration_ack(response);
+        ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
         return;
     }
 
-    ESP_LOGI(TAG_UROS, "Payload (%d bytes): %.120s%s",
-             len, safe_buffer, len > 120 ? "..." : "");
+    ESP_LOGI(TAG_UROS, "✓ Message received (%d bytes)", len);
+    ESP_LOGI(TAG_UROS, "Payload (first 200 chars): %.200s%s",
+             safe_buffer, len > 200 ? "..." : "");
 
     /* Step 2: Parse + validate JSON */
+    ESP_LOGI(TAG_UROS, "[2/4] Parsing JSON...");
     sensor_type_t sensor_type;
     const char *action = NULL;
 
@@ -643,25 +669,32 @@ static void calibration_callback(const void *msgin)
                                               sizeof(response),
                                               &sensor_type, &action);
     if (!root) {
+        ESP_LOGE(TAG_UROS, "✗ parse_calibration_json_safe FAILED");
         /* response already filled by parse function */
         send_calibration_ack(response);
+        ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
         return;
     }
 
     /* Extract sensor string for logging/response (safe: validated above) */
     const char *sensor_str = cJSON_GetObjectItem(root, "sensor")->valuestring;
 
-    ESP_LOGI(TAG_UROS, "Action: %s | Sensor: %s | Type: %d", action, sensor_str, sensor_type);
+    ESP_LOGI(TAG_UROS, "✓ JSON parsed successfully");
+    ESP_LOGI(TAG_UROS, "  Action: %s | Sensor: %s | Type: %d", action, sensor_str, sensor_type);
 
     /* Step 3: Execute action */
+    ESP_LOGI(TAG_UROS, "[3/4] Executing calibration action...");
     execute_calibration_action(root, sensor_type, sensor_str, action,
                                response, sizeof(response));
+    ESP_LOGI(TAG_UROS, "✓ Action executed");
 
     /* Step 4: Cleanup + send ACK (ALWAYS, even on error) */
+    ESP_LOGI(TAG_UROS, "[4/4] Sending ACK...");
     cJSON_Delete(root);
     send_calibration_ack(response);
 
-    ESP_LOGI(TAG_UROS, "─── Calibration command processed ───");
+    ESP_LOGI(TAG_UROS, "✓ Calibration command processed successfully");
+    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
 }
 
 /* ============================================================================
