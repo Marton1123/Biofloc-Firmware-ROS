@@ -103,6 +103,18 @@ def print_info(text):
     """Print info message"""
     print(f"{Colors.OKCYAN}ℹ {text}{Colors.ENDC}")
 
+def print_table_header(headers):
+    """Print a formatted table header"""
+    print(f"{Colors.BOLD}{'─' * 100}{Colors.ENDC}")
+    header_line = " | ".join([f"{h:^15}" for h in headers])
+    print(f"{Colors.BOLD}{header_line}{Colors.ENDC}")
+    print(f"{Colors.BOLD}{'─' * 100}{Colors.ENDC}")
+
+def print_table_row(values):
+    """Print a formatted table row"""
+    row_line = " | ".join([f"{str(v):^15}" for v in values])
+    print(row_line)
+
 def check_process_running(process_name):
     """Check if a process is running (robust check without grep pipes)"""
     result = subprocess.run(
@@ -258,10 +270,11 @@ def calibrate_remote():
     
     Calibrates sensors remotely without USB connection.
     Supports pH, temperature, and future sensors with N-point calibration.
+    Includes device selection for multi-ESP32 environments.
     """
     print_header("Calibración Remota de Sensores")
     
-    print_info("Sistema de calibración remota v3.1.0")
+    print_info("Sistema de calibración remota v3.1.0 (Multi-Device)")
     print_info("Compatible con: pH, Temperatura, y sensores futuros")
     print_info("")
     print_info("Ventajas:")
@@ -270,6 +283,7 @@ def calibrate_remote():
     print_info("  ✓ Sensores permanecen energizados")
     print_info("  ✓ Calibración de 2-5 puntos")
     print_info("  ✓ Persistencia automática en NVS")
+    print_info("  ✓ Filtrado de dispositivo en redes multi-ESP32")
     print("")
     
     # Check if micro-ROS Agent is running
@@ -282,6 +296,61 @@ def calibrate_remote():
         print_info("  ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888")
         print()
         return
+    
+    # === DEVICE DISCOVERY (NEW in v3.1.0) ===
+    print()
+    print_header("Paso 1: Selección de Dispositivo")
+    print_info("Detectando dispositivos ESP32 activos en la red...")
+    print()
+    
+    devices = discover_active_devices(duration_seconds=10)
+    
+    if not devices:
+        print_error("No se detectaron dispositivos ESP32 en la red")
+        print_info("Verifica que:")
+        print_info("  - Los ESP32 estén encendidos y conectados")
+        print_info("  - El micro-ROS Agent esté activo")
+        print_info("  - Los dispositivos estén publicando en /biofloc/sensor_data")
+        return
+    
+    # Let user select device
+    print()
+    print(f"{Colors.BOLD}Dispositivos disponibles para calibración:{Colors.ENDC}")
+    device_list = list(devices.keys())
+    for idx, device_id in enumerate(device_list, start=1):
+        data = devices[device_id]
+        location = data.get('location', 'unknown')
+        sensors = data.get('sensors', {})
+        ph = sensors.get('ph', {}).get('value', 'N/A')
+        temp = sensors.get('temperature', {}).get('value', 'N/A')
+        
+        print(f"  [{idx}] {device_id}")
+        print(f"      Ubicación: {location}")
+        print(f"      Sensores: pH={ph}, Temp={temp}°C")
+    print("  [0] Cancelar")
+    print()
+    
+    device_choice = input(f"{Colors.OKBLUE}Selecciona dispositivo a calibrar: {Colors.ENDC}").strip()
+    
+    try:
+        device_idx = int(device_choice)
+        if device_idx == 0:
+            print_info("Calibración cancelada")
+            return
+        if device_idx < 1 or device_idx > len(device_list):
+            print_error("Opción inválida")
+            return
+        
+        selected_device = device_list[device_idx - 1]
+        print_success(f"✓ Dispositivo seleccionado: {selected_device}")
+        print()
+    except ValueError:
+        print_error("Ingresa un número válido")
+        return
+    
+    # === SENSOR SELECTION ===
+    print()
+    print_header("Paso 2: Selección de Sensor")
     
     # Select sensor type
     print(f"{Colors.BOLD}Sensores disponibles:{Colors.ENDC}")
@@ -409,9 +478,9 @@ def calibrate_remote():
         print("")
         input(f"{Colors.WARNING}Presiona Enter cuando el sensor esté estabilizado...{Colors.ENDC}")
         
-        # Read current voltage from sensor
-        print_info("Leyendo voltaje del sensor...")
-        voltage = read_sensor_voltage(sensor_id)
+        # Read current voltage from sensor (with device filter)
+        print_info(f"Leyendo voltaje del sensor de {selected_device}...")
+        voltage = read_sensor_voltage(sensor_id, device_id=selected_device)
         
         if voltage is None:
             print_error(f"No se pudo leer voltaje del sensor {sensor_name}")
@@ -473,6 +542,207 @@ def calibrate_remote():
         print_error("Falló la calibración remota")
         print_info("Revisa los logs del ESP32 para más detalles")
 
+def discover_active_devices(duration_seconds=10):
+    """
+    Discover active ESP32 devices by listening to /biofloc/sensor_data
+    
+    Args:
+        duration_seconds: How long to listen for messages
+        
+    Returns:
+        dict: Dictionary of device_id -> latest_data
+    """
+    try:
+        import json
+        import time
+        
+        print_info(f"Escaneando red para detectar dispositivos activos ({duration_seconds}s)...")
+        print_info("Presiona Ctrl+C para terminar antes")
+        
+        devices = {}
+        start_time = time.time()
+        
+        # Use timeout command to read multiple messages
+        cmd = [
+            'bash', '-c',
+            f'source /opt/ros/jazzy/setup.bash && '
+            f'source ~/microros_ws/install/local_setup.bash && '
+            f'timeout {duration_seconds} ros2 topic echo --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
+        ]
+        
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        current_message = []
+        
+        try:
+            while time.time() - start_time < duration_seconds + 2:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                
+                current_message.append(line)
+                
+                # Detect end of message (ROS 2 separates messages with "---")
+                if line.strip() == '---':
+                    # Parse accumulated message
+                    full_message = ''.join(current_message)
+                    
+                    if 'data:' in full_message:
+                        try:
+                            json_str = full_message.split('data:', 1)[1].strip()
+                            
+                            # Remove outer quotes
+                            if json_str.startswith("'") or json_str.startswith('"'):
+                                json_str = json_str[1:-1]
+                            
+                            # Remove control characters
+                            json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
+                            
+                            # Remove trailing "---" if present
+                            if json_str.endswith('---'):
+                                json_str = json_str[:-3].strip()
+                            
+                            data = json.loads(json_str)
+                            device_id = data.get('device_id', 'unknown')
+                            
+                            # Store or update device data
+                            devices[device_id] = data
+                            
+                            print(f"{Colors.OKGREEN}●{Colors.ENDC} {device_id}", end='\r')
+                            
+                        except json.JSONDecodeError:
+                            pass  # Skip malformed messages
+                    
+                    current_message = []
+        
+        except KeyboardInterrupt:
+            print_info("\nEscaneo interrumpido por el usuario")
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        
+        print()  # New line after status updates
+        
+        if devices:
+            print_success(f"✓ Detectados {len(devices)} dispositivo(s) activo(s)")
+        else:
+            print_warning("No se detectaron dispositivos en la red")
+            print_info("Verifica que:")
+            print_info("  - El micro-ROS Agent esté corriendo")
+            print_info("  - Los ESP32 estén conectados y publicando")
+        
+        return devices
+        
+    except Exception as e:
+        print_error(f"Error durante escaneo: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+def monitor_device_health():
+    """
+    Monitor health telemetry of all active ESP32 devices (live dashboard)
+    """
+    print_header("Monitor de Salud de Dispositivos")
+    
+    print_info("Sistema de monitoreo en vivo de ESP32 v3.2.0")
+    print_info("Muestra: Device ID, Uptime, Free Heap, Reset Reason, Sensores")
+    print()
+    
+    # Check if micro-ROS Agent is running
+    if not check_process_running('micro_ros_agent'):
+        print_error("El micro-ROS Agent NO está corriendo")
+        print_info("Inicia el Agent primero con la opción [1] del menú")
+        return
+    
+    # Discover active devices
+    devices = discover_active_devices(duration_seconds=15)
+    
+    if not devices:
+        print_warning("No hay dispositivos para monitorear")
+        return
+    
+    print()
+    print_header("Dashboard de Salud de Dispositivos")
+    
+    # Print table
+    headers = ["Device ID", "Uptime", "Free Heap", "Reset Reason", "pH", "Temp (°C)"]
+    print_table_header(headers)
+    
+    for device_id, data in sorted(devices.items()):
+        # Extract system telemetry
+        system = data.get('system', {})
+        uptime_sec = system.get('uptime_sec', 0)
+        free_heap = system.get('free_heap', 0)
+        reset_reason = system.get('reset_reason', 'UNKNOWN')
+        
+        # Format uptime
+        if uptime_sec < 60:
+            uptime_str = f"{uptime_sec}s"
+        elif uptime_sec < 3600:
+            uptime_str = f"{uptime_sec//60}min"
+        else:
+            hours = uptime_sec // 3600
+            minutes = (uptime_sec % 3600) // 60
+            uptime_str = f"{hours}h{minutes}m"
+        
+        # Format free heap
+        free_heap_kb = free_heap / 1024
+        heap_str = f"{free_heap_kb:.1f}KB"
+        
+        # Extract sensor values
+        sensors = data.get('sensors', {})
+        ph_value = sensors.get('ph', {}).get('value', 'N/A')
+        temp_value = sensors.get('temperature', {}).get('value', 'N/A')
+        
+        # Format sensor values
+        if isinstance(ph_value, (int, float)):
+            ph_str = f"{ph_value:.2f}"
+        else:
+            ph_str = str(ph_value)
+        
+        if isinstance(temp_value, (int, float)):
+            temp_str = f"{temp_value:.1f}"
+        else:
+            temp_str = str(temp_value)
+        
+        # Shorten device_id if too long
+        device_display = device_id[-12:] if len(device_id) > 15 else device_id
+        
+        # Print row
+        values = [device_display, uptime_str, heap_str, reset_reason[:12], ph_str, temp_str]
+        print_table_row(values)
+    
+    print(f"{Colors.BOLD}{'─' * 100}{Colors.ENDC}")
+    print()
+    
+    # Health analysis
+    print_info("Análisis de Salud:")
+    for device_id, data in devices.items():
+        system = data.get('system', {})
+        free_heap = system.get('free_heap', 0)
+        reset_reason = system.get('reset_reason', 'UNKNOWN')
+        uptime_sec = system.get('uptime_sec', 0)
+        
+        device_short = device_id[-12:]
+        
+        # Check for memory issues
+        if free_heap < 100000:  # Less than 100 KB
+            print_warning(f"  ⚠ {device_short}: Heap bajo ({free_heap/1024:.1f}KB) - Posible memory leak")
+        
+        # Check for recent resets
+        if uptime_sec < 300 and reset_reason in ['TASK_WDT', 'PANIC', 'WDT']:
+            print_warning(f"  ⚠ {device_short}: Reinicio reciente por {reset_reason}")
+        
+        # Check for normal operation
+        if free_heap >= 100000 and uptime_sec > 7200:  # > 2 hours
+            print_success(f"  ✓ {device_short}: Operación estable (uptime {uptime_sec//3600}h)")
+    
+    print()
+
 def get_sensor_unit(sensor_id):
     """Get measurement unit for sensor"""
     units = {
@@ -484,9 +754,13 @@ def get_sensor_unit(sensor_id):
     }
     return units.get(sensor_id, '')
 
-def read_sensor_voltage(sensor_id):
+def read_sensor_voltage(sensor_id, device_id=None):
     """
     Read current sensor voltage from ROS topic /biofloc/sensor_data
+    
+    Args:
+        sensor_id: Type of sensor ('ph', 'temperature', etc.)
+        device_id: Specific device to read from (None = first message)
     
     Returns:
         float: Sensor voltage in V, or None if read failed
@@ -494,7 +768,11 @@ def read_sensor_voltage(sensor_id):
     try:
         import json
         
-        print_info("Escuchando topic /biofloc/sensor_data...")
+        if device_id:
+            print_info(f"Escuchando voltaje de {device_id}...")
+        else:
+            print_info("Escuchando topic /biofloc/sensor_data...")
+        
         print_info("Esperando mensaje del ESP32 (puede tomar hasta 20 segundos)...")
         
         # ESP32 publishes every 4 seconds, so wait up to 20s to be safe
@@ -503,66 +781,90 @@ def read_sensor_voltage(sensor_id):
             'bash', '-c',
             'source /opt/ros/jazzy/setup.bash && '
             'source ~/microros_ws/install/local_setup.bash && '
-            'timeout 20 ros2 topic echo --once --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
+            'timeout 20 ros2 topic echo --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        # If device_id is specified, we may need to read multiple messages
+        max_attempts = 10 if device_id else 1
         
-        # Debug output
-        if result.returncode != 0:
-            print_warning(f"Comando falló con código {result.returncode}")
-            if result.stderr:
-                print_warning(f"Error: {result.stderr[:200]}")
-            if result.stdout:
-                print_warning(f"Output: {result.stdout[:200]}")
-            return None
-        
-        # Parse output: "data: {...json...}"
-        output = result.stdout.strip()
-        
-        if not output:
-            print_warning("No se recibió salida del comando")
-            return None
+        for attempt in range(max_attempts):
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
             
-        if 'data:' not in output:
-            print_warning(f"Formato inesperado. Output: {output[:200]}")
-            return None
+            # Debug output
+            if result.returncode != 0:
+                if attempt == max_attempts - 1:  # Last attempt
+                    print_warning(f"Comando falló con código {result.returncode}")
+                    if result.stderr:
+                        print_warning(f"Error: {result.stderr[:200]}")
+                    if result.stdout:
+                        print_warning(f"Output: {result.stdout[:200]}")
+                continue
+            
+            # Parse output: "data: {...json...}"
+            output = result.stdout.strip()
+            
+            if not output:
+                if attempt == max_attempts - 1:
+                    print_warning("No se recibió salida del comando")
+                continue
+                
+            if 'data:' not in output:
+                if attempt == max_attempts - 1:
+                    print_warning(f"Formato inesperado. Output: {output[:200]}")
+                continue
+            
+            # Extract JSON string after "data:"
+            json_str = output.split('data:', 1)[1].strip()
+            
+            # Remove outer quotes if present (ROS wraps the string)
+            if json_str.startswith("'") or json_str.startswith('"'):
+                json_str = json_str[1:-1]
+            
+            # CRITICAL: Remove control characters (newlines, tabs) that break JSON parsing
+            # ROS topic echo may return pretty-printed JSON with newlines
+            json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
+            
+            # Parse JSON
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError as je:
+                if attempt == max_attempts - 1:
+                    print_warning(f"Error parseando JSON: {je}")
+                    print_warning(f"JSON string: {json_str[:200]}")
+                continue
+            
+            # Check if this is the device we want
+            msg_device_id = data.get('device_id', 'unknown')
+            
+            if device_id and msg_device_id != device_id:
+                # Not the device we want, try again
+                print_info(f"  Recibido mensaje de {msg_device_id}, esperando {device_id}...")
+                time.sleep(2)  # Wait a bit before next attempt
+                continue
+            
+            # Extract voltage based on sensor type
+            if sensor_id == 'ph':
+                voltage = data.get('sensors', {}).get('ph', {}).get('voltage')
+            elif sensor_id == 'temperature':
+                voltage = data.get('sensors', {}).get('temperature', {}).get('voltage')
+            else:
+                print_warning(f"Tipo de sensor desconocido: {sensor_id}")
+                return None
+            
+            if voltage is None:
+                print_warning(f"No se encontró voltaje para sensor {sensor_id} en JSON")
+                print_warning(f"Datos recibidos: {json_str[:200]}")
+                return None
+            
+            print_success(f"✓ Voltaje recibido de {msg_device_id}: {voltage}V")
+            return voltage
         
-        # Extract JSON string after "data:"
-        json_str = output.split('data:', 1)[1].strip()
+        # If we get here with device_id, we never found the right device
+        if device_id:
+            print_error(f"No se recibieron mensajes de {device_id} en {max_attempts} intentos")
+            print_info("Verifica que el dispositivo esté conectado y publicando")
         
-        # Remove outer quotes if present (ROS wraps the string)
-        if json_str.startswith("'") or json_str.startswith('"'):
-            json_str = json_str[1:-1]
-        
-        # CRITICAL: Remove control characters (newlines, tabs) that break JSON parsing
-        # ROS topic echo may return pretty-printed JSON with newlines
-        json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
-        
-        # Parse JSON
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError as je:
-            print_warning(f"Error parseando JSON: {je}")
-            print_warning(f"JSON string: {json_str[:200]}")
-            return None
-        
-        # Extract voltage based on sensor type
-        if sensor_id == 'ph':
-            voltage = data.get('sensors', {}).get('ph', {}).get('voltage')
-        elif sensor_id == 'temperature':
-            voltage = data.get('sensors', {}).get('temperature', {}).get('voltage')
-        else:
-            print_warning(f"Tipo de sensor desconocido: {sensor_id}")
-            return None
-        
-        if voltage is None:
-            print_warning(f"No se encontró voltaje para sensor {sensor_id} en JSON")
-            print_warning(f"Datos recibidos: {json_str[:200]}")
-            return None
-        
-        print_success(f"✓ Voltaje recibido: {voltage}V")
-        return voltage
+        return None
         
     except subprocess.TimeoutExpired:
         print_error("Timeout: No se recibieron datos en 25 segundos")
@@ -1251,23 +1553,24 @@ def show_menu():
     print("  [3] Monitorear Sensores (sin BD)")
     print("  [4] Verificar Estado del Sistema")
     print("  [5] Verificar Conectividad ESP32")
+    print("  [6] 🩺 Monitor de Salud de Dispositivos (NUEVO)")
     print()
     
     print(f"{Colors.BOLD}Calibración:{Colors.ENDC}")
-    print("  [6] ⭐ Calibración Remota (Recomendado)")
-    print("  [7] Calibrar Sensor pH (3 puntos, USB)")
-    print("  [8] Calibrar Sensor Temperatura (3 puntos, USB)")
-    print("  [9] Ajuste Rápido pH (valores manuales)")
-    print("  [10] Ajuste Rápido Temperatura (-1.6°C)")
+    print("  [7] ⭐ Calibración Remota Multi-Device (Recomendado)")
+    print("  [8] Calibrar Sensor pH (3 puntos, USB)")
+    print("  [9] Calibrar Sensor Temperatura (3 puntos, USB)")
+    print("  [10] Ajuste Rápido pH (valores manuales)")
+    print("  [11] Ajuste Rápido Temperatura (-1.6°C)")
     print()
     
     print(f"{Colors.BOLD}Configuración:{Colors.ENDC}")
-    print("  [11] Configurar Credenciales WiFi")
-    print("  [12] Regenerar sdkconfig desde defaults")
+    print("  [12] Configurar Credenciales WiFi")
+    print("  [13] Regenerar sdkconfig desde defaults")
     print()
     
     print(f"{Colors.BOLD}Firmware:{Colors.ENDC}")
-    print("  [13] Compilar y Flashear Firmware")
+    print("  [14] Compilar y Flashear Firmware")
     print()
     
     print(f"{Colors.BOLD}Otros:{Colors.ENDC}")
@@ -1289,14 +1592,15 @@ def main():
         '3': monitor_sensors,
         '4': check_system_status,
         '5': check_esp32_connectivity,
-        '6': calibrate_remote,
-        '7': calibrate_ph,
-        '8': calibrate_temperature,
-        '9': quick_adjust_ph,
-        '10': quick_adjust_temperature,
-        '11': configure_wifi,
-        '12': regenerate_sdkconfig,
-        '13': build_and_flash,
+        '6': monitor_device_health,
+        '7': calibrate_remote,
+        '8': calibrate_ph,
+        '9': calibrate_temperature,
+        '10': quick_adjust_ph,
+        '11': quick_adjust_temperature,
+        '12': configure_wifi,
+        '13': regenerate_sdkconfig,
+        '14': build_and_flash,
     }
     
     while True:
