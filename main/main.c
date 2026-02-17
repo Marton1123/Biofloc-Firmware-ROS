@@ -1,20 +1,22 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.1.1
+ * @version 3.4.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
  *
- * @changelog v3.1.1 (2026-02-12)
- *   - ✅ CRÍTICO: Eliminado boot loop en caso de desconexión
- *   - ✅ Reconexión infinita sin reinicio del ESP32
- *   - ✅ LED de estado indica desconexión (parpadeo lento)
- *   - ✅ Aumentados timeouts para redes lentas (5s → 10s)
- *   - ✅ Verificación de NVS antes de inicializar
- *   - ✅ Compatibilidad 100% con biofloc_manager.py
+ * @changelog v3.4.0 (2026-02-17)
+ *   - ✅ REFACTORIZACIÓN: Callback de calibración dividido en funciones SRP
+ *   - ✅ safe_receive_msg(): Copia segura con null-terminator obligatorio
+ *   - ✅ parse_calibration_json_safe(): Validación exhaustiva de JSON/cJSON
+ *   - ✅ execute_calibration_action(): Despacho de acciones aislado
+ *   - ✅ send_calibration_ack(): Publicación de ACK con device_id
+ *   - ✅ Watchdog feeding en micro_ros_task (previene deadlock silencioso)
+ *   - ✅ device_id incluido en TODAS las respuestas de calibración
+ *   - ✅ goto eliminado: flujo de control limpio con returns
  */
 
 #include <string.h>
@@ -51,7 +53,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.3.0"
+#define FIRMWARE_VERSION        "3.4.0"
 
 /* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
 #define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
@@ -314,249 +316,352 @@ static void sensor_task(void *arg)
 }
 
 /* ============================================================================
- * Calibration Command Handler
+ * Calibration Command Handler — SRP Architecture (v3.4.0)
+ *
+ * Flow: calibration_callback()
+ *   └─ safe_receive_msg()          → Copy & null-terminate
+ *   └─ parse_calibration_json_safe() → Validate JSON structure
+ *   └─ execute_calibration_action()  → Dispatch reset/get/calibrate
+ *   └─ send_calibration_ack()       → Publish ACK with device_id
+ *
+ * INVARIANT: This code NEVER crashes. Every path returns gracefully.
  * ============================================================================ */
 
 /**
- * @brief Parse and execute calibration command from JSON
- * 
- * Expected JSON format:
- * {
- *   "sensor": "ph" | "temperature" | "dissolved_oxygen" | "conductivity" | "turbidity",
- *   "action": "calibrate" | "reset" | "get",
- *   "points": [
- *     {"voltage": 1.42, "value": 4.01},
- *     {"voltage": 2.45, "value": 6.86},
- *     {"voltage": 3.28, "value": 9.18}
- *   ]
- * }
+ * @brief Safely copy micro-ROS string to null-terminated local buffer
+ *
+ * micro-ROS XRCE-DDS deserialization fills msg->data.data with EXACTLY
+ * msg->data.size bytes but does NOT guarantee a '\0' terminator.
+ * cJSON_Parse() reads until '\0' → segfault without this copy.
+ *
+ * @param msg      Incoming micro-ROS string message
+ * @param buffer   Destination buffer (must be >= buffer_size bytes)
+ * @param buf_size Size of destination buffer
+ * @return Number of bytes copied (>0), or -1 on error
  */
-static void calibration_callback(const void *msgin)
+static int safe_receive_msg(const std_msgs__msg__String *msg,
+                            char *buffer, size_t buf_size)
 {
-    const std_msgs__msg__String *msg = (const std_msgs__msg__String *)msgin;
-    static char response_buffer[CAL_RESPONSE_SIZE];  /* static: reduce stack pressure */
-
-    /* === SAFETY GATE: Validate message before ANY access === */
     if (!msg || !msg->data.data || msg->data.size == 0) {
-        ESP_LOGE(TAG_UROS, "SAFETY: NULL or empty calibration message received");
-        snprintf(response_buffer, sizeof(response_buffer),
-                 "{\"status\":\"error\",\"message\":\"Empty or NULL message received\"}");
-        goto send_response;
+        ESP_LOGE(TAG_UROS, "SAFETY: NULL or empty calibration message");
+        return -1;
     }
 
-    /* Diagnostics: log free heap to detect memory pressure */
-    ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
-    ESP_LOGI(TAG_UROS, "Received calibration command (%d bytes): %.120s%s",
-             (int)msg->data.size, msg->data.data,
-             msg->data.size > 120 ? "..." : "");
-
-    /* ================================================================
-     * CRITICAL FIX: Null-Terminator Trap
-     * 
-     * micro-ROS XRCE-DDS deserialization fills msg->data.data with
-     * EXACTLY msg->data.size bytes but does NOT guarantee a '\0'
-     * terminator. cJSON_Parse() expects a C string (null-terminated).
-     * Without this copy, cJSON reads past the buffer boundary until
-     * it hits a random 0x00 in memory → access violation → PANIC.
-     * ================================================================ */
-    static char local_buffer[CAL_CMD_BUFFER_SIZE];  /* static: keep off stack */
     size_t copy_len = msg->data.size;
-    if (copy_len >= sizeof(local_buffer)) {
-        copy_len = sizeof(local_buffer) - 1;
-        ESP_LOGW(TAG_UROS, "Calibration msg truncated: %d -> %d bytes",
+    if (copy_len >= buf_size) {
+        copy_len = buf_size - 1;
+        ESP_LOGW(TAG_UROS, "Message truncated: %d → %d bytes",
                  (int)msg->data.size, (int)copy_len);
     }
-    memcpy(local_buffer, msg->data.data, copy_len);
-    local_buffer[copy_len] = '\0';
 
-    ESP_LOGI(TAG_UROS, "Parsing JSON (%d bytes, null-terminated)", (int)copy_len);
+    memcpy(buffer, msg->data.data, copy_len);
+    buffer[copy_len] = '\0';
+    return (int)copy_len;
+}
 
-    /* Parse JSON from null-terminated local copy */
-    cJSON *json = cJSON_Parse(local_buffer);
-    if (!json) {
-        ESP_LOGE(TAG_UROS, "Failed to parse calibration JSON");
-        snprintf(response_buffer, sizeof(response_buffer),
-                 "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
-        goto send_response;
+/**
+ * @brief Parse and validate calibration JSON structure
+ *
+ * Validates: root is object, "sensor" is string and known,
+ * "action" is string and known. On any failure, fills response
+ * buffer and returns NULL.
+ *
+ * @param json_str  Null-terminated JSON string
+ * @param resp      Response buffer (filled on error)
+ * @param resp_size Size of response buffer
+ * @param out_type  Output: parsed sensor type enum
+ * @param out_action Output: pointer to action string (inside cJSON tree)
+ * @return cJSON root on success (caller MUST cJSON_Delete), NULL on error
+ */
+static cJSON *parse_calibration_json_safe(const char *json_str,
+                                          char *resp, size_t resp_size,
+                                          sensor_type_t *out_type,
+                                          const char **out_action)
+{
+    cJSON *root = cJSON_Parse(json_str);
+    if (!root) {
+        const char *err_ptr = cJSON_GetErrorPtr();
+        ESP_LOGE(TAG_UROS, "JSON parse failed near: %.40s", err_ptr ? err_ptr : "(null)");
+        snprintf(resp, resp_size,
+                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Invalid JSON\"}",
+                 g_app_state.device_id);
+        return NULL;
     }
 
-    /* Extract sensor type */
-    cJSON *sensor_json = cJSON_GetObjectItem(json, "sensor");
-    if (!cJSON_IsString(sensor_json)) {
+    /* Validate "sensor" field */
+    cJSON *sensor_json = cJSON_GetObjectItem(root, "sensor");
+    if (!cJSON_IsString(sensor_json) || !sensor_json->valuestring) {
         ESP_LOGE(TAG_UROS, "Missing or invalid 'sensor' field");
-        snprintf(response_buffer, sizeof(response_buffer),
-                 "{\"status\":\"error\",\"message\":\"Missing sensor field\"}");
-        cJSON_Delete(json);
-        goto send_response;
+        snprintf(resp, resp_size,
+                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Missing 'sensor' field\"}",
+                 g_app_state.device_id);
+        cJSON_Delete(root);
+        return NULL;
     }
 
     const char *sensor_str = sensor_json->valuestring;
-    sensor_type_t sensor_type = SENSOR_TYPE_MAX;
-    
-    if (strcmp(sensor_str, "ph") == 0) {
-        sensor_type = SENSOR_TYPE_PH;
-    } else if (strcmp(sensor_str, "temperature") == 0) {
-        sensor_type = SENSOR_TYPE_TEMPERATURE;
-    } else if (strcmp(sensor_str, "dissolved_oxygen") == 0) {
-        sensor_type = SENSOR_TYPE_DISSOLVED_OXYGEN;
-    } else if (strcmp(sensor_str, "conductivity") == 0) {
-        sensor_type = SENSOR_TYPE_CONDUCTIVITY;
-    } else if (strcmp(sensor_str, "turbidity") == 0) {
-        sensor_type = SENSOR_TYPE_TURBIDITY;
-    } else {
+    *out_type = SENSOR_TYPE_MAX;  /* sentinel = unknown */
+
+    if (strcmp(sensor_str, "ph") == 0)                  *out_type = SENSOR_TYPE_PH;
+    else if (strcmp(sensor_str, "temperature") == 0)     *out_type = SENSOR_TYPE_TEMPERATURE;
+    else if (strcmp(sensor_str, "dissolved_oxygen") == 0) *out_type = SENSOR_TYPE_DISSOLVED_OXYGEN;
+    else if (strcmp(sensor_str, "conductivity") == 0)    *out_type = SENSOR_TYPE_CONDUCTIVITY;
+    else if (strcmp(sensor_str, "turbidity") == 0)       *out_type = SENSOR_TYPE_TURBIDITY;
+
+    if (*out_type == SENSOR_TYPE_MAX) {
         ESP_LOGE(TAG_UROS, "Unknown sensor type: %s", sensor_str);
-        snprintf(response_buffer, sizeof(response_buffer),
-                 "{\"status\":\"error\",\"message\":\"Unknown sensor: %s\"}", sensor_str);
-        cJSON_Delete(json);
-        goto send_response;
+        snprintf(resp, resp_size,
+                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Unknown sensor: %s\"}",
+                 g_app_state.device_id, sensor_str);
+        cJSON_Delete(root);
+        return NULL;
     }
 
-    /* Extract action */
-    cJSON *action_json = cJSON_GetObjectItem(json, "action");
-    if (!cJSON_IsString(action_json)) {
+    /* Validate "action" field */
+    cJSON *action_json = cJSON_GetObjectItem(root, "action");
+    if (!cJSON_IsString(action_json) || !action_json->valuestring) {
         ESP_LOGE(TAG_UROS, "Missing or invalid 'action' field");
-        snprintf(response_buffer, sizeof(response_buffer),
-                 "{\"status\":\"error\",\"message\":\"Missing action field\"}");
-        cJSON_Delete(json);
-        goto send_response;
+        snprintf(resp, resp_size,
+                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Missing 'action' field\"}",
+                 g_app_state.device_id);
+        cJSON_Delete(root);
+        return NULL;
     }
 
-    const char *action = action_json->valuestring;
+    *out_action = action_json->valuestring;
+    return root;  /* Caller MUST call cJSON_Delete(root) when done */
+}
 
-    /* Handle action: reset */
+/**
+ * @brief Execute a calibration action (reset, get, or calibrate)
+ *
+ * This function encapsulates all NVS-touching logic. On return,
+ * `resp` is always populated with a valid JSON response.
+ *
+ * @param root       Parsed cJSON root (for extracting "points")
+ * @param sensor_type Validated sensor type
+ * @param sensor_str  Sensor name string (for response messages)
+ * @param action      Action string ("reset", "get", or "calibrate")
+ * @param resp        Response buffer
+ * @param resp_size   Size of response buffer
+ */
+static void execute_calibration_action(cJSON *root,
+                                       sensor_type_t sensor_type,
+                                       const char *sensor_str,
+                                       const char *action,
+                                       char *resp, size_t resp_size)
+{
+    /* ---- ACTION: reset ---- */
     if (strcmp(action, "reset") == 0) {
         esp_err_t err = sensors_reset_calibration(sensor_type);
-        if (err == ESP_OK) {
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"success\",\"sensor\":\"%s\",\"message\":\"Calibration reset to factory defaults\"}",
-                     sensor_str);
-        } else {
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"Reset failed\"}",
-                     sensor_str);
-        }
-        cJSON_Delete(json);
-        goto send_response;
+        snprintf(resp, resp_size,
+                 "{\"device_id\":\"%s\",\"status\":\"%s\",\"sensor\":\"%s\","
+                 "\"message\":\"%s\"}",
+                 g_app_state.device_id,
+                 (err == ESP_OK) ? "success" : "error",
+                 sensor_str,
+                 (err == ESP_OK) ? "Calibration reset to factory defaults"
+                                 : "Reset failed");
+        return;
     }
 
-    /* Handle action: get */
+    /* ---- ACTION: get ---- */
     if (strcmp(action, "get") == 0) {
         sensor_calibration_t cal;
         esp_err_t err = sensors_get_calibration(sensor_type, &cal);
         if (err == ESP_OK) {
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"success\",\"sensor\":\"%s\",\"enabled\":%s,\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,\"points\":%d}",
-                     sensor_str, cal.enabled ? "true" : "false",
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"success\",\"sensor\":\"%s\","
+                     "\"enabled\":%s,\"slope\":%.6f,\"offset\":%.6f,"
+                     "\"r_squared\":%.4f,\"points\":%d}",
+                     g_app_state.device_id, sensor_str,
+                     cal.enabled ? "true" : "false",
                      cal.slope, cal.offset, cal.r_squared, cal.num_points);
         } else {
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"Failed to get calibration\"}",
-                     sensor_str);
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"error\",\"sensor\":\"%s\","
+                     "\"message\":\"Failed to get calibration\"}",
+                     g_app_state.device_id, sensor_str);
         }
-        cJSON_Delete(json);
-        goto send_response;
+        return;
     }
 
-    /* Handle action: calibrate */
+    /* ---- ACTION: calibrate ---- */
     if (strcmp(action, "calibrate") == 0) {
-        cJSON *points_json = cJSON_GetObjectItem(json, "points");
+        /* Validate "points" array */
+        cJSON *points_json = cJSON_GetObjectItem(root, "points");
         if (!cJSON_IsArray(points_json)) {
             ESP_LOGE(TAG_UROS, "Missing or invalid 'points' array");
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"message\":\"Missing points array\"}");
-            cJSON_Delete(json);
-            goto send_response;
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"error\","
+                     "\"message\":\"Missing 'points' array\"}",
+                     g_app_state.device_id);
+            return;
         }
 
         int num_points = cJSON_GetArraySize(points_json);
         if (num_points < 2 || num_points > MAX_CALIBRATION_POINTS) {
-            ESP_LOGE(TAG_UROS, "Invalid number of points: %d (need 2-5)", num_points);
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"message\":\"Need 2-5 calibration points, got %d\"}",
-                     num_points);
-            cJSON_Delete(json);
-            goto send_response;
+            ESP_LOGE(TAG_UROS, "Invalid point count: %d (need 2-%d)", num_points, MAX_CALIBRATION_POINTS);
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"error\","
+                     "\"message\":\"Need 2-%d calibration points, got %d\"}",
+                     g_app_state.device_id, MAX_CALIBRATION_POINTS, num_points);
+            return;
         }
 
+        /* Parse each calibration point with exhaustive validation */
         calibration_point_t points[MAX_CALIBRATION_POINTS];
-        bool parse_error = false;
-        
+
         for (int i = 0; i < num_points; i++) {
-            cJSON *point = cJSON_GetArrayItem(points_json, i);
-            if (!point) {
-                ESP_LOGE(TAG_UROS, "NULL point at index %d", i);
-                parse_error = true;
-                break;
-            }
-            
-            cJSON *voltage = cJSON_GetObjectItem(point, "voltage");
-            cJSON *value = cJSON_GetObjectItem(point, "value");
-
-            if (!voltage || !cJSON_IsNumber(voltage) || !value || !cJSON_IsNumber(value)) {
-                ESP_LOGE(TAG_UROS, "Invalid point %d: missing or non-numeric voltage/value", i);
-                parse_error = true;
-                break;
+            cJSON *pt = cJSON_GetArrayItem(points_json, i);
+            if (!pt || !cJSON_IsObject(pt)) {
+                ESP_LOGE(TAG_UROS, "Point %d: not an object", i);
+                snprintf(resp, resp_size,
+                         "{\"device_id\":\"%s\",\"status\":\"error\","
+                         "\"message\":\"Point %d is not an object\"}",
+                         g_app_state.device_id, i);
+                return;
             }
 
-            points[i].voltage = (float)voltage->valuedouble;
-            points[i].value = (float)value->valuedouble;
-            
-            ESP_LOGI(TAG_UROS, "  Point %d: %.3fV → %.2f pH", i+1, points[i].voltage, points[i].value);
-        }
-        
-        if (parse_error) {
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"message\":\"Failed to parse calibration points\"}");
-            cJSON_Delete(json);
-            goto send_response;
+            cJSON *v = cJSON_GetObjectItem(pt, "voltage");
+            cJSON *val = cJSON_GetObjectItem(pt, "value");
+
+            if (!v || !cJSON_IsNumber(v) || !val || !cJSON_IsNumber(val)) {
+                ESP_LOGE(TAG_UROS, "Point %d: missing or non-numeric voltage/value", i);
+                snprintf(resp, resp_size,
+                         "{\"device_id\":\"%s\",\"status\":\"error\","
+                         "\"message\":\"Point %d: invalid voltage/value\"}",
+                         g_app_state.device_id, i);
+                return;
+            }
+
+            points[i].voltage = (float)v->valuedouble;
+            points[i].value   = (float)val->valuedouble;
+            ESP_LOGI(TAG_UROS, "  Point %d: %.3fV → %.2f %s",
+                     i + 1, points[i].voltage, points[i].value, sensor_str);
         }
 
-        /* Perform calibration with memory zeroing */
-        calibration_response_t cal_response;
-        memset(&cal_response, 0, sizeof(cal_response));
-        
-        ESP_LOGI(TAG_UROS, "Starting calibration for %s with %d points", sensor_str, num_points);
-        esp_err_t err = sensors_calibrate_generic(sensor_type, points, num_points, &cal_response);
+        /* Execute calibration + NVS save */
+        calibration_response_t cal_resp;
+        memset(&cal_resp, 0, sizeof(cal_resp));
 
-        if (err == ESP_OK && cal_response.status == CAL_STATUS_SUCCESS) {
-            ESP_LOGI(TAG_UROS, "✓ Calibration SUCCESS: R²=%.4f, slope=%.6f, offset=%.6f", 
-                     cal_response.r_squared, cal_response.slope, cal_response.offset);
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"success\",\"sensor\":\"%s\",\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,\"message\":\"%s\"}",
-                     sensor_str, cal_response.slope, cal_response.offset,
-                     cal_response.r_squared, cal_response.message);
+        ESP_LOGI(TAG_UROS, "Calibrating %s with %d points...", sensor_str, num_points);
+        esp_err_t err = sensors_calibrate_generic(sensor_type, points,
+                                                   (uint8_t)num_points, &cal_resp);
+
+        if (err == ESP_OK && cal_resp.status == CAL_STATUS_SUCCESS) {
+            ESP_LOGI(TAG_UROS, "✓ Calibration SUCCESS: R²=%.4f slope=%.6f offset=%.6f",
+                     cal_resp.r_squared, cal_resp.slope, cal_resp.offset);
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"success\",\"sensor\":\"%s\","
+                     "\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,"
+                     "\"message\":\"%s\"}",
+                     g_app_state.device_id, sensor_str,
+                     cal_resp.slope, cal_resp.offset, cal_resp.r_squared,
+                     cal_resp.message);
         } else {
-            ESP_LOGE(TAG_UROS, "✗ Calibration FAILED: %s (err=%d)", cal_response.message, err);
-            snprintf(response_buffer, sizeof(response_buffer),
-                     "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"%s\"}",
-                     sensor_str, cal_response.message);
+            ESP_LOGE(TAG_UROS, "✗ Calibration FAILED: %s (err=%d)", cal_resp.message, err);
+            snprintf(resp, resp_size,
+                     "{\"device_id\":\"%s\",\"status\":\"error\",\"sensor\":\"%s\","
+                     "\"message\":\"%s\"}",
+                     g_app_state.device_id, sensor_str, cal_resp.message);
         }
-
-        cJSON_Delete(json);
-        goto send_response;
+        return;
     }
 
-    /* Unknown action */
+    /* ---- Unknown action ---- */
     ESP_LOGE(TAG_UROS, "Unknown action: %s", action);
-    snprintf(response_buffer, sizeof(response_buffer),
-             "{\"status\":\"error\",\"message\":\"Unknown action: %s\"}", action);
-    cJSON_Delete(json);
+    snprintf(resp, resp_size,
+             "{\"device_id\":\"%s\",\"status\":\"error\","
+             "\"message\":\"Unknown action: %s\"}",
+             g_app_state.device_id, action);
+}
 
-send_response:
-    /* Publish response */
-    if (g_uros_ctx.initialized) {
-        g_uros_ctx.calibration_response_msg.data.data = response_buffer;
-        g_uros_ctx.calibration_response_msg.data.size = strlen(response_buffer);
-        g_uros_ctx.calibration_response_msg.data.capacity = CAL_RESPONSE_SIZE;
-
-        rcl_ret_t ret = rcl_publish(&g_uros_ctx.calibration_response_publisher,
-                                    &g_uros_ctx.calibration_response_msg, NULL);
-        if (ret == RCL_RET_OK) {
-            ESP_LOGI(TAG_UROS, "Calibration response sent");
-        } else {
-            ESP_LOGW(TAG_UROS, "Failed to send calibration response (rc=%d)", (int)ret);
-        }
+/**
+ * @brief Publish calibration ACK response to /biofloc/calibration_status
+ *
+ * Always publishes, even on error — the Python side needs to know what happened.
+ * Uses static response_msg buffer to avoid stack pressure.
+ *
+ * @param response  Null-terminated JSON response string
+ */
+static void send_calibration_ack(const char *response)
+{
+    if (!g_uros_ctx.initialized) {
+        ESP_LOGW(TAG_UROS, "Cannot send ACK: micro-ROS not initialized");
+        return;
     }
+
+    g_uros_ctx.calibration_response_msg.data.data     = (char *)response;
+    g_uros_ctx.calibration_response_msg.data.size     = strlen(response);
+    g_uros_ctx.calibration_response_msg.data.capacity = CAL_RESPONSE_SIZE;
+
+    rcl_ret_t ret = rcl_publish(&g_uros_ctx.calibration_response_publisher,
+                                &g_uros_ctx.calibration_response_msg, NULL);
+    if (ret == RCL_RET_OK) {
+        ESP_LOGI(TAG_UROS, "✓ ACK sent (%d bytes)", (int)strlen(response));
+    } else {
+        ESP_LOGW(TAG_UROS, "✗ ACK publish failed (rc=%d)", (int)ret);
+    }
+}
+
+/**
+ * @brief Main calibration callback — orchestrates SRP functions
+ *
+ * Called by the rclc executor when a message arrives on calibration_cmd.
+ * This function NEVER crashes: every failure path logs + sends ACK + returns.
+ */
+static void calibration_callback(const void *msgin)
+{
+    /* Static buffers — off the stack to reduce pressure on the 20KB task stack */
+    static char safe_buffer[CAL_CMD_BUFFER_SIZE];
+    static char response[CAL_RESPONSE_SIZE];
+
+    ESP_LOGI(TAG_UROS, "─── Calibration command received ───");
+    ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+
+    /* Step 1: Safe receive with null-termination */
+    int len = safe_receive_msg((const std_msgs__msg__String *)msgin,
+                               safe_buffer, sizeof(safe_buffer));
+    if (len < 0) {
+        snprintf(response, sizeof(response),
+                 "{\"device_id\":\"%s\",\"status\":\"error\","
+                 "\"message\":\"NULL or empty message\"}",
+                 g_app_state.device_id);
+        send_calibration_ack(response);
+        return;
+    }
+
+    ESP_LOGI(TAG_UROS, "Payload (%d bytes): %.120s%s",
+             len, safe_buffer, len > 120 ? "..." : "");
+
+    /* Step 2: Parse + validate JSON */
+    sensor_type_t sensor_type;
+    const char *action = NULL;
+
+    cJSON *root = parse_calibration_json_safe(safe_buffer, response,
+                                              sizeof(response),
+                                              &sensor_type, &action);
+    if (!root) {
+        /* response already filled by parse function */
+        send_calibration_ack(response);
+        return;
+    }
+
+    /* Extract sensor string for logging/response (safe: validated above) */
+    const char *sensor_str = cJSON_GetObjectItem(root, "sensor")->valuestring;
+
+    ESP_LOGI(TAG_UROS, "Action: %s | Sensor: %s | Type: %d", action, sensor_str, sensor_type);
+
+    /* Step 3: Execute action */
+    execute_calibration_action(root, sensor_type, sensor_str, action,
+                               response, sizeof(response));
+
+    /* Step 4: Cleanup + send ACK (ALWAYS, even on error) */
+    cJSON_Delete(root);
+    send_calibration_ack(response);
+
+    ESP_LOGI(TAG_UROS, "─── Calibration command processed ───");
 }
 
 /* ============================================================================
@@ -670,6 +775,15 @@ static void micro_ros_task(void *arg)
     g_uros_ctx.initialized = true;
     g_app_state.microros_ready = true;
 
+    /* Subscribe micro-ROS task to watchdog (CRITICAL: prevents silent deadlocks) */
+    ESP_LOGI(TAG_UROS, "Subscribing micro-ROS task to watchdog...");
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err == ESP_OK) {
+        ESP_LOGI(TAG_UROS, "✓ micro-ROS task watchdog active (timeout: %ds)", WATCHDOG_TIMEOUT_SEC);
+    } else {
+        ESP_LOGW(TAG_UROS, "Watchdog subscription failed (err=%d) - non-fatal", wdt_err);
+    }
+
     ESP_LOGI(TAG_MAIN, "=========================================");
     ESP_LOGI(TAG_MAIN, "  micro-ROS Ready!");
     ESP_LOGI(TAG_MAIN, "  Node: /%s/biofloc_node", ROS_NAMESPACE);
@@ -682,6 +796,9 @@ static void micro_ros_task(void *arg)
     const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;
 
     while (1) {
+        /* Feed watchdog FIRST — prevents deadlock detection during long spin */
+        esp_task_wdt_reset();
+
         rclc_executor_spin_some(&g_uros_ctx.executor, RCL_MS_TO_NS(100));
 
         if (++ping_counter >= ping_interval) {

@@ -450,7 +450,10 @@ def main(args=None):
         node.get_logger().info("Shutting down...")
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass  # Already shut down — safe to ignore
 
 
 if __name__ == '__main__':

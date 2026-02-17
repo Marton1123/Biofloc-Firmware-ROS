@@ -769,7 +769,12 @@ def get_sensor_unit(sensor_id):
 
 def read_sensor_voltage(sensor_id, device_id=None):
     """
-    Read current sensor voltage from ROS topic /biofloc/sensor_data using rclpy
+    Read current sensor voltage from ROS topic /biofloc/sensor_data
+    
+    ARCHITECTURE: Uses subprocess (ros2 topic echo) instead of rclpy.
+    This is CRITICAL — rclpy.init() creates a competing DDS participant that
+    interferes with the micro-ROS Agent, causing port conflicts (errno 98),
+    zombie nodes, and silent Agent death. Subprocess is isolated and safe.
     
     Args:
         sensor_id: Type of sensor ('ph', 'temperature', etc.)
@@ -779,100 +784,88 @@ def read_sensor_voltage(sensor_id, device_id=None):
         float: Sensor voltage in V, or None if read failed
     """
     try:
-        import json
-        import rclpy
-        from rclpy.node import Node
-        from std_msgs.msg import String
+        import json as json_lib
+        import re
         
         if device_id:
             print_info(f"Leyendo voltaje del sensor de {device_id}...")
         else:
             print_info("Leyendo voltaje del sensor...")
         
-        # Initialize rclpy if not already initialized
-        try:
-            rclpy.init()
-        except RuntimeError:
-            # Already initialized
-            pass
+        timeout_sec = 20
         
-        # Create a temporary node for reading sensor data
-        class VoltageReader(Node):
-            def __init__(self):
-                super().__init__('voltage_reader_temp')
-                self.voltage = None
-                self.device_found = False
-                self.subscription = self.create_subscription(
-                    String,
-                    '/biofloc/sensor_data',
-                    self.sensor_callback,
-                    10
-                )
-                self.target_sensor = sensor_id
-                self.target_device = device_id
-                self.get_logger().info(f'Escuchando /biofloc/sensor_data para {sensor_id}...')
-            
-            def sensor_callback(self, msg):
-                try:
-                    # Parse JSON from message
-                    data = json.loads(msg.data)
+        # Use subprocess to read from topic — NEVER rclpy
+        cmd = [
+            'bash', '-c',
+            f'source /opt/ros/jazzy/setup.bash && '
+            f'source ~/microros_ws/install/local_setup.bash && '
+            f'timeout {timeout_sec} ros2 topic echo --full-length '
+            f'/biofloc/sensor_data std_msgs/msg/String 2>&1'
+        ]
+        
+        print_info(f"Esperando mensaje del ESP32 (timeout: {timeout_sec}s)...")
+        
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=timeout_sec + 5)
+        output = result.stdout
+        
+        if not output or 'data:' not in output:
+            if device_id:
+                print_error(f"Timeout: No se recibieron mensajes de {device_id} en {timeout_sec}s")
+            else:
+                print_error(f"Timeout: No se recibieron mensajes en {timeout_sec}s")
+            print_info("Verifica que:")
+            print_info("  - El ESP32 esté conectado y publicando datos")
+            print_info("  - El micro-ROS Agent esté activo")
+            print_info("  - El topic /biofloc/sensor_data tenga mensajes")
+            return None
+        
+        # Split into individual messages and iterate most-recent-first
+        messages = output.split('---')
+        
+        for msg_block in reversed(messages):
+            if 'data:' not in msg_block:
+                continue
+            try:
+                # Extract JSON from data: '...' or data: "..."
+                match = re.search(r"data:\s*['\"](.+?)['\"](?:\n|$)", msg_block, re.DOTALL)
+                if not match:
+                    # Fallback: simple split
+                    json_str = msg_block.split('data:', 1)[1].strip()
+                    if json_str.startswith("'") or json_str.startswith('"'):
+                        json_str = json_str[1:]
+                    if json_str.endswith("'") or json_str.endswith('"'):
+                        json_str = json_str[:-1]
+                else:
+                    json_str = match.group(1)
+                
+                # Clean escape characters
+                json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
+                
+                data = json_lib.loads(json_str)
+                msg_device_id = data.get('device_id', 'unknown')
+                
+                # Filter by device_id if specified
+                if device_id and msg_device_id != device_id:
+                    continue
+                
+                # Extract voltage for the requested sensor
+                sensors_data = data.get('sensors', {})
+                sensor_data = sensors_data.get(sensor_id, {})
+                voltage = sensor_data.get('voltage')
+                
+                if voltage is not None:
+                    print_success(f"✓ Voltaje recibido de {msg_device_id}: {voltage}V")
+                    return voltage
                     
-                    # Check if this is the device we want (if specified)
-                    msg_device_id = data.get('device_id', 'unknown')
-                    
-                    if self.target_device and msg_device_id != self.target_device:
-                        # Not the device we want, skip
-                        return
-                    
-                    # Extract voltage based on sensor type
-                    sensors_data = data.get('sensors', {})
-                    sensor_data = sensors_data.get(self.target_sensor, {})
-                    voltage = sensor_data.get('voltage')
-                    
-                    if voltage is not None:
-                        self.voltage = voltage
-                        self.device_found = True
-                        self.get_logger().info(f'✓ Voltaje recibido de {msg_device_id}: {voltage}V')
-                    
-                except json.JSONDecodeError as e:
-                    self.get_logger().warning(f'Error parseando JSON: {e}')
-                except Exception as e:
-                    self.get_logger().error(f'Error en callback: {e}')
+            except (json_lib.JSONDecodeError, KeyError, AttributeError):
+                continue
         
-        # Create reader node
-        reader = VoltageReader()
-        
-        # Spin with timeout (15 seconds = enough for 3-4 messages at 4s interval)
-        timeout_sec = 15.0
-        start_time = time.time()
-        
-        print_info(f"Esperando mensaje del ESP32 (timeout: {int(timeout_sec)}s)...")
-        
-        while (time.time() - start_time) < timeout_sec:
-            # Spin once to process callbacks
-            rclpy.spin_once(reader, timeout_sec=0.5)
-            
-            # Check if we got the voltage
-            if reader.device_found:
-                voltage = reader.voltage
-                reader.destroy_node()
-                print_success(f"✓ Voltaje recibido: {voltage}V")
-                return voltage
-            
-            # Small progress indicator
-            elapsed = int(time.time() - start_time)
-            if elapsed > 0 and elapsed % 3 == 0:
-                print(".", end='', flush=True)
-        
-        print()  # New line after dots
-        
-        # Timeout reached
-        reader.destroy_node()
-        
+        # Parsed messages but no matching voltage found
         if device_id:
-            print_error(f"Timeout: No se recibieron mensajes de {device_id} en {int(timeout_sec)}s")
+            print_error(f"No se encontraron datos de voltaje de {device_id}")
         else:
-            print_error(f"Timeout: No se recibieron mensajes en {int(timeout_sec)}s")
+            print_error("No se pudo extraer voltaje de los mensajes recibidos")
         
         print_info("Verifica que:")
         print_info("  - El ESP32 esté conectado y publicando datos")
@@ -880,11 +873,13 @@ def read_sensor_voltage(sensor_id, device_id=None):
         print_info("  - El topic /biofloc/sensor_data tenga mensajes")
         
         return None
-        
-    except ImportError as e:
-        print_error(f"Error importando rclpy: {e}")
-        print_error("Asegúrate de que ROS 2 Jazzy esté instalado y sourced")
-        print_info("Ejecuta: source /opt/ros/jazzy/setup.bash")
+    
+    except subprocess.TimeoutExpired:
+        print_error(f"Timeout: Proceso de lectura no respondió")
+        print_info("Verifica que:")
+        print_info("  - El ESP32 esté conectado y publicando datos")
+        print_info("  - El micro-ROS Agent esté activo")
+        print_info("  - El topic /biofloc/sensor_data tenga mensajes")
         return None
     except Exception as e:
         print_error(f"Error leyendo voltaje: {e}")
@@ -987,101 +982,151 @@ def save_calibration_to_mongodb(calibration_request, calibration_response, devic
 
 def publish_calibration_command(json_cmd, device_id=None):
     """
-    Publish calibration command to /biofloc/calibration_cmd topic
-    AND save to MongoDB as Digital Twin backup (only on confirmed ACK)
+    Publish calibration command and wait for ESP32 ACK (30s timeout)
+    
+    ARCHITECTURE: Start ACK listener BEFORE sending command to avoid race condition.
+    Uses subprocess for both send and receive — zero rclpy usage.
+    MongoDB save ONLY happens after confirmed ACK with status=success.
     
     Args:
         json_cmd: JSON string with calibration command
-        device_id: Device ID string for MongoDB save (optional)
+        device_id: Device ID string for ACK verification and MongoDB save
     
     Returns:
         bool: True ONLY if ESP32 confirmed success via ACK
     """
+    ack_process = None
+    
     try:
-        # Parse calibration data
         import json as json_lib
-        cal_data = json_lib.loads(json_cmd)
-        sensor_type = cal_data.get('sensor')
+        import re
         
-        # Escape single quotes in JSON for shell
+        cal_data = json_lib.loads(json_cmd)
+        
+        # ── Step 1: Start ACK listener BEFORE sending command ──
+        # This prevents the race condition where the ESP32 responds
+        # before we start listening, causing a "missed ACK" timeout.
+        print_info("Preparando listener de ACK en /biofloc/calibration_status...")
+        
+        ack_cmd = [
+            'bash', '-c',
+            'source /opt/ros/jazzy/setup.bash && '
+            'source ~/microros_ws/install/local_setup.bash && '
+            'timeout 30 ros2 topic echo --once --full-length '
+            '/biofloc/calibration_status std_msgs/msg/String 2>&1'
+        ]
+        
+        ack_process = subprocess.Popen(
+            ack_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        
+        # Give the DDS subscriber time to discover and connect
+        time.sleep(2)
+        
+        # ── Step 2: Publish calibration command ──
         json_escaped = json_cmd.replace("'", "'\"'\"'")
         
-        cmd = [
+        pub_cmd = [
             'bash', '-c',
             f'source /opt/ros/jazzy/setup.bash && '
             f'source ~/microros_ws/install/local_setup.bash && '
-            f"ros2 topic pub --once /biofloc/calibration_cmd std_msgs/msg/String \"data: '{json_escaped}'\""
+            f"ros2 topic pub --once /biofloc/calibration_cmd "
+            f"std_msgs/msg/String \"data: '{json_escaped}'\""
         ]
         
-        print_info(f"Comando: {json_cmd}")
+        print_info(f"Enviando comando al ESP32: {json_cmd[:100]}{'...' if len(json_cmd) > 100 else ''}")
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        pub_result = subprocess.run(pub_cmd, capture_output=True, text=True, timeout=15)
         
-        if result.returncode == 0:
-            print_info("✓ Comando enviado al ESP32")
-            print_info("Esperando confirmación (ACK) del ESP32...")
-            time.sleep(2)
-            
-            # Wait for ESP32 ACK response
-            cmd_response = [
-                'bash', '-c',
-                'source /opt/ros/jazzy/setup.bash && '
-                'source ~/microros_ws/install/local_setup.bash && '
-                'timeout 10 ros2 topic echo --once --full-length /biofloc/calibration_status std_msgs/msg/String'
-            ]
-            
-            response_result = subprocess.run(cmd_response, capture_output=True, text=True, timeout=15)
-            
-            if response_result.returncode == 0:
-                output = response_result.stdout.strip()
-                if 'data:' in output:
-                    response_data = output.split('data:', 1)[1].strip()
-                    if response_data.startswith("'") or response_data.startswith('"'):
-                        response_data = response_data[1:-1]
-                    
-                    print_info(f"Respuesta ESP32: {response_data}")
-                    
-                    # Parse ACK response
-                    try:
-                        response_json = json_lib.loads(response_data)
-                        if response_json.get('status') == 'success':
-                            print_success(f"✓ ACK confirmado: {response_json.get('message', 'Éxito')}")
-                            if 'slope' in response_json:
-                                print_info(f"  Slope: {response_json['slope']:.6f}")
-                            if 'offset' in response_json:
-                                print_info(f"  Offset: {response_json['offset']:.6f}")
-                            if 'r_squared' in response_json:
-                                print_info(f"  R²: {response_json['r_squared']:.4f}")
-                            
-                            # ===== DIGITAL TWIN: Save ONLY after confirmed ACK =====
-                            save_calibration_to_mongodb(cal_data, response_json, device_id=device_id)
-                            
-                            return True
-                        else:
-                            print_error(f"✗ ESP32 reportó error: {response_json.get('message', 'Error desconocido')}")
-                            return False
-                    except json_lib.JSONDecodeError:
-                        print_warning("Respuesta recibida pero JSON inválido - calibración NO confirmada")
-                        return False
-                else:
-                    print_error("✗ Respuesta vacía del ESP32 - calibración NO confirmada")
-                    return False
-            else:
-                print_error("✗ TIMEOUT: No se recibió ACK del ESP32")
-                print_error("  El ESP32 pudo haber sufrido un PANIC y reiniciado")
-                print_info("  Verifica los logs del ESP32 con: idf.py monitor")
-                print_info("  La calibración NO se guardó (ni en NVS ni en MongoDB)")
-                return False
-        else:
-            print_error(f"Error publicando comando: {result.stderr}")
+        if pub_result.returncode != 0:
+            print_error(f"Error publicando comando: {pub_result.stderr}")
+            ack_process.kill()
+            ack_process.wait()
             return False
+        
+        print_info("✓ Comando enviado, esperando ACK del ESP32 (timeout: 30s)...")
+        
+        # ── Step 3: Wait for ACK response ──
+        try:
+            ack_stdout, ack_stderr = ack_process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            ack_process.kill()
+            ack_process.wait()
+            print_error("✗ TIMEOUT: No se recibió ACK del ESP32 en 30 segundos")
+            print_error("  El ESP32 pudo haber sufrido un PANIC y reiniciado")
+            print_info("  Verifica los logs del ESP32 con: idf.py -p /dev/ttyUSB0 monitor")
+            print_info("  La calibración NO se guardó (ni en NVS ni en MongoDB)")
+            return False
+        
+        if ack_process.returncode != 0 or 'data:' not in (ack_stdout or ''):
+            print_error("✗ No se recibió respuesta válida del ESP32")
+            print_info("  Posibles causas:")
+            print_info("  - ESP32 sufrió PANIC al procesar el comando")
+            print_info("  - Timeout en la conexión micro-ROS")
+            print_info("  - Agent desconectado del ESP32")
+            return False
+        
+        # ── Step 4: Parse and validate ACK ──
+        try:
+            # Extract JSON from ros2 topic echo output
+            response_data = ack_stdout.split('data:', 1)[1].strip()
+            # Remove outer quotes
+            if response_data.startswith("'") or response_data.startswith('"'):
+                response_data = response_data[1:]
+            if response_data.endswith("'") or response_data.endswith('"'):
+                response_data = response_data[:-1]
+            # Clean escape chars
+            response_data = response_data.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
             
+            response_json = json_lib.loads(response_data)
+        except (json_lib.JSONDecodeError, IndexError, AttributeError) as e:
+            print_warning(f"ACK recibido pero JSON inválido: {e}")
+            print_info(f"  Raw: {ack_stdout[:200]}")
+            return False
+        
+        print_info(f"ACK recibido: {json_lib.dumps(response_json, ensure_ascii=False)[:200]}")
+        
+        # ── Step 5: Verify device_id matches ──
+        ack_device = response_json.get('device_id', '')
+        if device_id and ack_device and ack_device != device_id:
+            print_error(f"✗ ACK de dispositivo incorrecto: {ack_device} (esperaba {device_id})")
+            return False
+        
+        # ── Step 6: Check status ──
+        if response_json.get('status') == 'success':
+            print_success(f"✓ ESP32 confirmó calibración exitosa")
+            if 'slope' in response_json:
+                print_info(f"  Slope: {response_json['slope']:.6f}")
+            if 'offset' in response_json:
+                print_info(f"  Offset: {response_json['offset']:.6f}")
+            if 'r_squared' in response_json:
+                print_info(f"  R²: {response_json['r_squared']:.4f}")
+            
+            # ── Step 7: ONLY save to MongoDB after CONFIRMED success ACK ──
+            save_calibration_to_mongodb(cal_data, response_json, device_id=device_id)
+            
+            return True
+        else:
+            error_msg = response_json.get('message', 'Error desconocido')
+            print_error(f"✗ ESP32 reportó error: {error_msg}")
+            return False
+    
     except subprocess.TimeoutExpired:
         print_error("✗ TIMEOUT publicando comando ROS 2")
         return False
     except Exception as e:
         print_error(f"Error en calibración remota: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+    finally:
+        # Cleanup: ensure subprocess is always terminated
+        if ack_process and ack_process.poll() is None:
+            try:
+                ack_process.kill()
+                ack_process.wait(timeout=3)
+            except Exception:
+                pass
 
 def update_calibration(sensor_type, **kwargs):
     """
