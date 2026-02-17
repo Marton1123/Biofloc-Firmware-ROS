@@ -28,6 +28,9 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_task_wdt.h"  /* Hardware Task Watchdog Timer */
+#include "esp_timer.h"      /* System uptime */
+#include "esp_heap_caps.h"  /* Free heap tracking */
 
 #include <uros_network_interfaces.h>
 #include <rcl/rcl.h>
@@ -46,7 +49,11 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.1.1"
+#define FIRMWARE_VERSION        "3.2.0"
+
+/* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
+#define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
+#define WATCHDOG_FEED_INTERVAL  5000    /* Feed watchdog every 5 seconds */
 
 #define AGENT_IP                CONFIG_BIOFLOC_AGENT_IP
 #define AGENT_PORT              CONFIG_BIOFLOC_AGENT_PORT
@@ -128,6 +135,7 @@ typedef struct {
 static microros_context_t g_uros_ctx = {0};
 static app_state_t g_app_state = {0};
 static char g_agent_port_str[8];
+static TaskHandle_t g_sensor_task_handle = NULL;
 
 /* ============================================================================
  * Network Utilities
@@ -221,6 +229,15 @@ static void sensor_task(void *arg)
     ESP_LOGI(TAG_SENSOR, "Sensor task started");
     ESP_LOGI(TAG_SENSOR, "Sample interval: %d ms", SAMPLE_INTERVAL_MS);
     ESP_LOGI(TAG_SENSOR, "Location: %s", DEVICE_LOCATION);
+    
+    /* Subscribe to Task Watchdog Timer (CRITICAL for zombie state detection) */
+    ESP_LOGI(TAG_SENSOR, "Subscribing to watchdog (timeout: %ds)", WATCHDOG_TIMEOUT_SEC);
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err == ESP_OK) {
+        ESP_LOGI(TAG_SENSOR, "✓ Watchdog subscribed - will reset if blocked > %ds", WATCHDOG_TIMEOUT_SEC);
+    } else {
+        ESP_LOGW(TAG_SENSOR, "Failed to subscribe to watchdog (err=%d)", wdt_err);
+    }
 
     esp_err_t ret = sensors_init();
     if (ret != ESP_OK) {
@@ -243,15 +260,25 @@ static void sensor_task(void *arg)
 
     char json_buffer[JSON_BUFFER_SIZE];
     sensors_data_t sensor_data;
+    uint32_t watchdog_counter = 0;
 
     while (!g_app_state.microros_ready) {
         ESP_LOGD(TAG_SENSOR, "Waiting for micro-ROS...");
         vTaskDelay(pdMS_TO_TICKS(500));
+        
+        /* Feed watchdog even while waiting */
+        if (++watchdog_counter >= 10) {  /* Every 5 seconds (500ms * 10) */
+            watchdog_counter = 0;
+            esp_task_wdt_reset();
+        }
     }
 
     ESP_LOGI(TAG_SENSOR, "Starting sensor readings");
 
     while (1) {
+        /* Feed watchdog at the start of each iteration (CRITICAL) */
+        esp_task_wdt_reset();
+        
         ret = sensors_read_all(&sensor_data);
 
         if (ret == ESP_OK) {
@@ -622,6 +649,36 @@ void app_main(void)
     ESP_LOGI(TAG_MAIN, "  ESP-IDF: %s", esp_get_idf_version());
     ESP_LOGI(TAG_MAIN, "  micro-ROS: Jazzy");
     ESP_LOGI(TAG_MAIN, "=========================================");
+    
+    /* Log reset reason (for diagnostics) */
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    const char *reason_str = "UNKNOWN";
+    switch (reset_reason) {
+        case ESP_RST_POWERON:   reason_str = "POWER_ON"; break;
+        case ESP_RST_SW:        reason_str = "SOFTWARE"; break;
+        case ESP_RST_PANIC:     reason_str = "PANIC"; break;
+        case ESP_RST_INT_WDT:   reason_str = "INT_WDT"; break;
+        case ESP_RST_TASK_WDT:  reason_str = "TASK_WDT"; break;
+        case ESP_RST_WDT:       reason_str = "WDT"; break;
+        case ESP_RST_DEEPSLEEP: reason_str = "DEEP_SLEEP"; break;
+        case ESP_RST_BROWNOUT:  reason_str = "BROWNOUT"; break;
+        default: break;
+    }
+    ESP_LOGI(TAG_MAIN, "Reset reason: %s", reason_str);
+    
+    /* Initialize Hardware Task Watchdog Timer (CRITICAL for zombie state prevention) */
+    ESP_LOGI(TAG_MAIN, "Initializing hardware watchdog (timeout: %ds)", WATCHDOG_TIMEOUT_SEC);
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = WATCHDOG_TIMEOUT_SEC * 1000,
+        .idle_core_mask = 0,  /* Don't watch idle tasks */
+        .trigger_panic = false  /* Just reset, don't panic */
+    };
+    esp_err_t wdt_err = esp_task_wdt_init(&wdt_config);
+    if (wdt_err == ESP_OK) {
+        ESP_LOGI(TAG_MAIN, "✓ Watchdog initialized - will hard reset if task blocks > %ds", WATCHDOG_TIMEOUT_SEC);
+    } else {
+        ESP_LOGW(TAG_MAIN, "Failed to initialize watchdog (err=%d)", wdt_err);
+    }
 
     /* Initial delay for power stabilization */
     vTaskDelay(pdMS_TO_TICKS(500));

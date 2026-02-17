@@ -7,13 +7,14 @@ Operates in a secure IoT gateway where ESP32 devices have no Internet access.
 This node adds server-side timestamps to compensate for ESP32's lack of NTP.
 
 Architecture:
-    - Gateway (NUC): WiFi Hotspot (10.42.0.1) without Internet
+    - Gateway (Raspberry Pi 4): WiFi Hotspot (10.42.0.1) without Internet
     - ESP32: Connects to hotspot, publishes to micro-ROS Agent
-    - Bridge (this node): Adds timestamps, stores in MongoDB Atlas
+    - Bridge (this node): Adds timestamps, routes data to separate collections
     
-Two-collection architecture:
-    - telemetria: time-series sensor readings with indexed queries
+Three-collection architecture (v3.1):
+    - telemetria: time-series sensor readings (biological data)
     - devices: device metadata, state, and connection history
+    - system_health: ESP32 telemetry (free_heap, uptime, reset_reason)
 
 Usage:
     # 1. Configure credentials
@@ -33,7 +34,7 @@ Dependencies:
     pip install pymongo python-dotenv
 
 Author: @Marton1123
-Version: 3.0.0 (Two-collection architecture with auto-registration)
+Version: 3.1.0 (Three-collection architecture with telemetry routing)
 """
 
 import json
@@ -86,9 +87,10 @@ class SensorDBBridge(Node):
     """
     ROS 2 node that receives sensor data and stores it in MongoDB.
     
-    Two-collection architecture:
-        - telemetria: sensor readings (time-series)
+    Three-collection architecture (v3.1):
+        - telemetria: sensor readings (biological data, time-series)
         - devices: device metadata, state, connection history
+        - system_health: ESP32 telemetry (free_heap, uptime, reset_reason)
     """
     
     def __init__(self):
@@ -99,6 +101,7 @@ class SensorDBBridge(Node):
         self.db_name = os.getenv('MONGODB_DATABASE', 'SistemasLab')
         self.collection_name = os.getenv('MONGODB_COLLECTION', 'telemetria')
         self.devices_collection_name = os.getenv('MONGODB_COLLECTION_DEVICES', 'devices')
+        self.system_health_collection_name = 'system_health'  # New collection for telemetry
         self.topic_name = os.getenv('ROS_TOPIC', '/biofloc/sensor_data')
         self.log_data = os.getenv('LOG_DATA', 'true').lower() == 'true'
         
@@ -107,6 +110,7 @@ class SensorDBBridge(Node):
         self.db = None
         self.telemetria_collection = None
         self.devices_collection = None
+        self.system_health_collection = None  # New collection
         self.mongodb_connected = False
         
         # Statistics
@@ -132,11 +136,12 @@ class SensorDBBridge(Node):
         self.status_timer = self.create_timer(60.0, self._log_status)
         
         self.get_logger().info("=" * 60)
-        self.get_logger().info("Sensor DB Bridge v3.0 Started")
+        self.get_logger().info("Sensor DB Bridge v3.1 Started")
         self.get_logger().info(f"  Topic: {self.topic_name}")
         self.get_logger().info(f"  Database: {self.db_name}")
         self.get_logger().info(f"    - telemetria: {self.collection_name}")
         self.get_logger().info(f"    - devices: {self.devices_collection_name}")
+        self.get_logger().info(f"    - system_health: {self.system_health_collection_name}")
         self.get_logger().info(f"  MongoDB Connected: {self.mongodb_connected}")
         self.get_logger().info("=" * 60)
     
@@ -154,9 +159,11 @@ class SensorDBBridge(Node):
             self.db = self.mongo_client[self.db_name]
             self.telemetria_collection = self.db[self.collection_name]
             self.devices_collection = self.db[self.devices_collection_name]
+            self.system_health_collection = self.db[self.system_health_collection_name]  # New collection
             
             self.mongodb_connected = True
             self.get_logger().info(f"Connected to MongoDB: {self.db_name}")
+            self.get_logger().info(f"  Collections: telemetria, devices, system_health")
             return True
             
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
@@ -169,7 +176,7 @@ class SensorDBBridge(Node):
             return False
     
     def sensor_callback(self, msg: String):
-        """Process incoming JSON sensor messages and add server timestamp."""
+        """Process incoming JSON sensor messages with telemetry routing."""
         self.messages_received += 1
         
         try:
@@ -184,7 +191,40 @@ class SensorDBBridge(Node):
             location = data.get('location', 'lab')
             esp32_sample_id = data.get('timestamp', 'unknown')  # Sample counter from ESP32
             
-            # Extract sensor values
+            # === TELEMETRY ROUTING (v3.1 architecture) ===
+            # Extract and route system telemetry to separate collection
+            system_data = data.pop('system', None)  # Extract and remove from data
+            
+            if system_data and self.mongodb_connected and self.system_health_collection is not None:
+                try:
+                    # Create system_health document
+                    system_health_doc = {
+                        'device_id': device_id,
+                        'timestamp_gw': server_timestamp,  # Gateway (server) timestamp
+                        'timestamp_esp32': esp32_sample_id,  # ESP32 sample counter
+                        'location': location,
+                        'free_heap': system_data.get('free_heap', 0),
+                        'uptime_sec': system_data.get('uptime_sec', 0),
+                        'reset_reason': system_data.get('reset_reason', 'UNKNOWN'),
+                        '_ros_topic': self.topic_name
+                    }
+                    
+                    # Save to system_health collection
+                    result_health = self.system_health_collection.insert_one(system_health_doc)
+                    
+                    if result_health.inserted_id:
+                        self.get_logger().debug(
+                            f"System health saved: {device_id} | "
+                            f"heap: {system_data.get('free_heap', 0)} | "
+                            f"uptime: {system_data.get('uptime_sec', 0)}s | "
+                            f"reset: {system_data.get('reset_reason', 'UNKNOWN')}"
+                        )
+                    
+                except Exception as e:
+                    self.get_logger().error(f"Failed to save system_health: {e}")
+            
+            # === BIOLOGICAL DATA ROUTING ===
+            # Extract sensor values (data is now clean, no 'system' key)
             sensors = data.get('sensors', {})
             ph_data = sensors.get('ph', {})
             temp_data = sensors.get('temperature', {})
@@ -196,7 +236,7 @@ class SensorDBBridge(Node):
             temp_valid = -20 <= temperature <= 80
             ph_valid = 0 <= ph <= 14
             
-            # Create telemetria document (time-series data)
+            # Create telemetria document (time-series data, CLEAN - no system telemetry)
             telemetria_doc = {
                 'device_id': device_id,
                 'location': location,
@@ -221,9 +261,9 @@ class SensorDBBridge(Node):
             
             # Log sensor data
             if self.log_data:
-                self._log_sensor_data(telemetria_doc)
+                self._log_sensor_data(telemetria_doc, system_data)
             
-            # Save to MongoDB (two-collection architecture)
+            # Save to MongoDB (three-collection architecture)
             if self.mongodb_connected and self.telemetria_collection is not None:
                 try:
                     # 1. Insert reading into telemetria
@@ -262,6 +302,20 @@ class SensorDBBridge(Node):
                             if result.inserted_id:
                                 self.messages_saved += 1
                                 self._update_device_metadata(device_id, location, server_timestamp)
+                                
+                                # Also save system health if present
+                                if system_data:
+                                    system_health_doc = {
+                                        'device_id': device_id,
+                                        'timestamp_gw': server_timestamp,
+                                        'timestamp_esp32': esp32_sample_id,
+                                        'location': location,
+                                        'free_heap': system_data.get('free_heap', 0),
+                                        'uptime_sec': system_data.get('uptime_sec', 0),
+                                        'reset_reason': system_data.get('reset_reason', 'UNKNOWN'),
+                                        '_ros_topic': self.topic_name
+                                    }
+                                    self.system_health_collection.insert_one(system_health_doc)
                         except Exception as e:
                             self.get_logger().error(f"Failed to save after reconnect: {e}")
                             self.messages_failed += 1
@@ -324,8 +378,8 @@ class SensorDBBridge(Node):
         except Exception as e:
             self.get_logger().error(f"Error updating device metadata: {e}")
     
-    def _log_sensor_data(self, data: dict) -> None:
-        """Display sensor data in the log."""
+    def _log_sensor_data(self, data: dict, system_data: dict = None) -> None:
+        """Display sensor data and system telemetry in the log."""
         device = data.get('device_id', 'unknown')
         location = data.get('location', 'unknown')
         timestamp = data.get('timestamp', 'unknown')
@@ -342,12 +396,21 @@ class SensorDBBridge(Node):
         status_ph = "OK" if ph_valid else "ERR"
         status_temp = "OK" if temp_valid else "ERR"
         
-        self.get_logger().info(
+        # Base sensor data log
+        log_msg = (
             f"[{device}@{location}] "
             f"pH: {ph_val} [{status_ph}] | "
-            f"Temp: {temp_val}°C [{status_temp}] | "
-            f"{timestamp}"
+            f"Temp: {temp_val}°C [{status_temp}]"
         )
+        
+        # Append system telemetry if available
+        if system_data:
+            free_heap_kb = system_data.get('free_heap', 0) / 1024
+            uptime_min = system_data.get('uptime_sec', 0) / 60
+            reset_reason = system_data.get('reset_reason', 'UNKNOWN')
+            log_msg += f" | Heap: {free_heap_kb:.1f}KB | Uptime: {uptime_min:.1f}min | Reset: {reset_reason}"
+        
+        self.get_logger().info(log_msg)
     
     def _log_status(self) -> None:
         """Log periodic statistics."""

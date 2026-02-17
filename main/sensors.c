@@ -1,7 +1,7 @@
 /**
  * @file    sensors.c
  * @brief   CWT-BL pH and Temperature sensor driver implementation
- * @version 3.1.0 - Added generic remote calibration system with NVS persistence
+ * @version 3.2.0 - Added embedded telemetry (free_heap, uptime, reset_reason)
  */
 
 #include "sensors.h"
@@ -15,6 +15,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"      /* esp_reset_reason() */
+#include "esp_timer.h"       /* esp_timer_get_time() for uptime */
+#include "esp_heap_caps.h"   /* esp_get_free_heap_size() */
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -526,7 +529,28 @@ int sensors_to_json(const sensors_data_t *data, char *buffer,
     if (data == NULL || buffer == NULL || device_id == NULL || location == NULL) {
         return -1;
     }
+    
+    /* Get system telemetry (EMBEDDED TELEMETRY - no extra topic needed) */
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint64_t uptime_us = esp_timer_get_time();
+    uint32_t uptime_sec = (uint32_t)(uptime_us / 1000000ULL);
+    
+    /* Get reset reason and convert to string */
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    const char *reset_reason_str = "UNKNOWN";
+    switch (reset_reason) {
+        case ESP_RST_POWERON:   reset_reason_str = "POWER_ON"; break;
+        case ESP_RST_SW:        reset_reason_str = "SOFTWARE"; break;
+        case ESP_RST_PANIC:     reset_reason_str = "PANIC"; break;
+        case ESP_RST_INT_WDT:   reset_reason_str = "INT_WDT"; break;
+        case ESP_RST_TASK_WDT:  reset_reason_str = "TASK_WDT"; break;
+        case ESP_RST_WDT:       reset_reason_str = "WDT"; break;
+        case ESP_RST_DEEPSLEEP: reset_reason_str = "DEEP_SLEEP"; break;
+        case ESP_RST_BROWNOUT:  reset_reason_str = "BROWNOUT"; break;
+        default: reset_reason_str = "UNKNOWN"; break;
+    }
 
+    /* Construct JSON with EMBEDDED TELEMETRY in "system" object */
     int written = snprintf(buffer, buffer_size,
         "{"
         "\"device_id\":\"%s\","
@@ -545,6 +569,11 @@ int sensors_to_json(const sensors_data_t *data, char *buffer,
                 "\"unit\":\"%s\","
                 "\"valid\":%s"
             "}"
+        "},"
+        "\"system\":{"
+            "\"free_heap\":%lu,"
+            "\"uptime_sec\":%lu,"
+            "\"reset_reason\":\"%s\""
         "}"
         "}",
         device_id,
@@ -557,10 +586,14 @@ int sensors_to_json(const sensors_data_t *data, char *buffer,
         data->temperature.value,
         data->temperature.voltage,
         data->temperature.unit ? data->temperature.unit : SENSOR_UNIT_CELSIUS,
-        data->temperature.valid ? "true" : "false"
+        data->temperature.valid ? "true" : "false",
+        free_heap,
+        uptime_sec,
+        reset_reason_str
     );
 
     if (written < 0 || (size_t)written >= buffer_size) {
+        ESP_LOGE(TAG, "JSON buffer overflow: needed %d bytes, have %zu", written, buffer_size);
         return -1;
     }
 
