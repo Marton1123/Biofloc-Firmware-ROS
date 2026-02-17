@@ -260,7 +260,7 @@ def calibrate_temperature():
                         
                         choice = input("\n¿Actualizar sdkconfig.defaults automáticamente? (S/n): ").strip().lower()
                         if choice != 'n':
-                            update_temp_calibration(slope=1000000, offset=offset_millidegrees)
+                            update_calibration('temperature', slope=1000000, offset=offset_millidegrees)
             except Exception as e:
                 print_warning(f"No se pudo auto-actualizar la configuración: {e}")
                 print_info("Deberás actualizar manualmente")
@@ -1062,13 +1062,6 @@ def publish_calibration_command(json_cmd):
                         else:
                             print_error(f"✗ {response_json.get('message', 'Error desconocido')}")
                             return False
-                    except json_lib.JSONDecodeError:
-                        print_warning("Respuesta recibida pero no se pudo parsear")
-                        return True
-                            return True
-                        else:
-                            print_error(f"✗ {response_json.get('message', 'Error desconocido')}")
-                            return False
                     except json.JSONDecodeError:
                         print_warning("Respuesta recibida pero no se pudo parsear")
                         return True
@@ -1233,7 +1226,7 @@ def quick_adjust_temperature():
         return
     
     # Update with -1.6°C offset
-    update_temp_calibration(slope=1000000, offset=-1600)
+    update_calibration('temperature', slope=1000000, offset=-1600)
 
 
 def configure_wifi():
