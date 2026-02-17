@@ -554,15 +554,14 @@ def discover_active_devices(duration_seconds=10):
     """
     try:
         import json
-        import time
+        import re
         
         print_info(f"Escaneando red para detectar dispositivos activos ({duration_seconds}s)...")
         print_info("Presiona Ctrl+C para terminar antes")
         
         devices = {}
-        start_time = time.time()
         
-        # Use timeout command to read multiple messages
+        # Use timeout command to capture all messages
         cmd = [
             'bash', '-c',
             f'source /opt/ros/jazzy/setup.bash && '
@@ -570,69 +569,78 @@ def discover_active_devices(duration_seconds=10):
             f'timeout {duration_seconds} ros2 topic echo --full-length /biofloc/sensor_data std_msgs/msg/String 2>&1'
         ]
         
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        current_message = []
-        
         try:
-            while time.time() - start_time < duration_seconds + 2:
-                line = process.stdout.readline()
-                if not line:
-                    break
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 5)
+            
+            # Parse output: contains multiple "data: '...' \n---" blocks
+            output = result.stdout
+            
+            if not output or 'data:' not in output:
+                print_warning("No se recibieron mensajes del tópico")
+                print_info("Verifica que:")
+                print_info("  - El micro-ROS Agent esté corriendo: ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888")
+                print_info("  - Los ESP32 estén conectados y publicando")
+                return {}
+            
+            # Split by separator "---" to get individual messages
+            messages = output.split('---')
+            
+            for msg_block in messages:
+                if 'data:' not in msg_block:
+                    continue
                 
-                current_message.append(line)
-                
-                # Detect end of message (ROS 2 separates messages with "---")
-                if line.strip() == '---':
-                    # Parse accumulated message
-                    full_message = ''.join(current_message)
+                try:
+                    # Extract content after "data:" 
+                    # Format is: data: '{"device_id": "...", ...}'
+                    match = re.search(r"data:\s*['\"](.+?)['\"](?:\n|$)", msg_block, re.DOTALL)
                     
-                    if 'data:' in full_message:
-                        try:
-                            json_str = full_message.split('data:', 1)[1].strip()
-                            
-                            # Remove outer quotes
-                            if json_str.startswith("'") or json_str.startswith('"'):
-                                json_str = json_str[1:-1]
-                            
-                            # Remove control characters
-                            json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '')
-                            
-                            # Remove trailing "---" if present
-                            if json_str.endswith('---'):
-                                json_str = json_str[:-3].strip()
-                            
-                            data = json.loads(json_str)
-                            device_id = data.get('device_id', 'unknown')
-                            
-                            # Store or update device data
-                            devices[device_id] = data
-                            
-                            print(f"{Colors.OKGREEN}●{Colors.ENDC} {device_id}", end='\r')
-                            
-                        except json.JSONDecodeError:
-                            pass  # Skip malformed messages
+                    if not match:
+                        # Fallback: simple split
+                        json_str = msg_block.split('data:', 1)[1].strip()
+                        # Remove outer quotes
+                        if json_str.startswith("'") or json_str.startswith('"'):
+                            json_str = json_str[1:]
+                        if json_str.endswith("'") or json_str.endswith('"'):
+                            json_str = json_str[:-1]
+                    else:
+                        json_str = match.group(1)
                     
-                    current_message = []
+                    # Clean escape characters (ROS may add \\n, \\t, \\r)
+                    json_str = json_str.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
+                    
+                    # Parse JSON
+                    data = json.loads(json_str)
+                    device_id = data.get('device_id', 'unknown')
+                    
+                    # Store or update device data
+                    devices[device_id] = data
+                    
+                    # Show progress
+                    print(f"{Colors.OKGREEN}●{Colors.ENDC} {device_id}", end='\r', flush=True)
+                    
+                except (json.JSONDecodeError, KeyError, AttributeError) as e:
+                    # Skip malformed messages
+                    continue
         
+        except subprocess.TimeoutExpired:
+            print_info("\nTiempo de escaneo completado")
         except KeyboardInterrupt:
             print_info("\nEscaneo interrumpido por el usuario")
-        finally:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
         
         print()  # New line after status updates
         
         if devices:
             print_success(f"✓ Detectados {len(devices)} dispositivo(s) activo(s)")
+            for device_id in devices:
+                print(f"  {Colors.OKCYAN}●{Colors.ENDC} {device_id}")
         else:
             print_warning("No se detectaron dispositivos en la red")
-            print_info("Verifica que:")
-            print_info("  - El micro-ROS Agent esté corriendo")
-            print_info("  - Los ESP32 estén conectados y publicando")
+            print_info("Diagnóstico:")
+            print_info("  1. Verifica que el tópico esté activo:")
+            print_info("     ros2 topic list | grep sensor_data")
+            print_info("  2. Verifica publicación manual:")
+            print_info("     ros2 topic echo --once /biofloc/sensor_data")
+            print_info("  3. Reinicia el micro-ROS Agent si es necesario")
         
         return devices
         

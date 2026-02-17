@@ -24,6 +24,11 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Build and monitor logs
+*.log
+build_*.log
+monitor_*.log
+
 # IDE / Editor
 .vscode/
 .idea/
