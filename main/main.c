@@ -51,7 +51,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.2.0"
+#define FIRMWARE_VERSION        "3.3.0"
 
 /* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
 #define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
@@ -66,7 +66,7 @@
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
 
 #ifndef CONFIG_MICRO_ROS_APP_STACK
-#define CONFIG_MICRO_ROS_APP_STACK 16000
+#define CONFIG_MICRO_ROS_APP_STACK 20480
 #endif
 
 #ifndef CONFIG_MICRO_ROS_APP_TASK_PRIO
@@ -350,8 +350,29 @@ static void calibration_callback(const void *msgin)
              (int)msg->data.size, msg->data.data,
              msg->data.size > 120 ? "..." : "");
 
-    /* Parse JSON */
-    cJSON *json = cJSON_Parse((const char *)msg->data.data);
+    /* ================================================================
+     * CRITICAL FIX: Null-Terminator Trap
+     * 
+     * micro-ROS XRCE-DDS deserialization fills msg->data.data with
+     * EXACTLY msg->data.size bytes but does NOT guarantee a '\0'
+     * terminator. cJSON_Parse() expects a C string (null-terminated).
+     * Without this copy, cJSON reads past the buffer boundary until
+     * it hits a random 0x00 in memory → access violation → PANIC.
+     * ================================================================ */
+    static char local_buffer[CAL_CMD_BUFFER_SIZE];  /* static: keep off stack */
+    size_t copy_len = msg->data.size;
+    if (copy_len >= sizeof(local_buffer)) {
+        copy_len = sizeof(local_buffer) - 1;
+        ESP_LOGW(TAG_UROS, "Calibration msg truncated: %d -> %d bytes",
+                 (int)msg->data.size, (int)copy_len);
+    }
+    memcpy(local_buffer, msg->data.data, copy_len);
+    local_buffer[copy_len] = '\0';
+
+    ESP_LOGI(TAG_UROS, "Parsing JSON (%d bytes, null-terminated)", (int)copy_len);
+
+    /* Parse JSON from null-terminated local copy */
+    cJSON *json = cJSON_Parse(local_buffer);
     if (!json) {
         ESP_LOGE(TAG_UROS, "Failed to parse calibration JSON");
         snprintf(response_buffer, sizeof(response_buffer),
