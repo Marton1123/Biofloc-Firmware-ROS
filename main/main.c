@@ -443,33 +443,54 @@ static void calibration_callback(const void *msgin)
         }
 
         calibration_point_t points[MAX_CALIBRATION_POINTS];
+        bool parse_error = false;
+        
         for (int i = 0; i < num_points; i++) {
             cJSON *point = cJSON_GetArrayItem(points_json, i);
+            if (!point) {
+                ESP_LOGE(TAG_UROS, "NULL point at index %d", i);
+                parse_error = true;
+                break;
+            }
+            
             cJSON *voltage = cJSON_GetObjectItem(point, "voltage");
             cJSON *value = cJSON_GetObjectItem(point, "value");
 
-            if (!cJSON_IsNumber(voltage) || !cJSON_IsNumber(value)) {
-                ESP_LOGE(TAG_UROS, "Invalid point %d: missing voltage or value", i);
-                snprintf(response_buffer, sizeof(response_buffer),
-                         "{\"status\":\"error\",\"message\":\"Invalid point %d\"}",i);
-                cJSON_Delete(json);
-                goto send_response;
+            if (!voltage || !cJSON_IsNumber(voltage) || !value || !cJSON_IsNumber(value)) {
+                ESP_LOGE(TAG_UROS, "Invalid point %d: missing or non-numeric voltage/value", i);
+                parse_error = true;
+                break;
             }
 
             points[i].voltage = (float)voltage->valuedouble;
             points[i].value = (float)value->valuedouble;
+            
+            ESP_LOGI(TAG_UROS, "  Point %d: %.3fV → %.2f pH", i+1, points[i].voltage, points[i].value);
+        }
+        
+        if (parse_error) {
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"status\":\"error\",\"message\":\"Failed to parse calibration points\"}");
+            cJSON_Delete(json);
+            goto send_response;
         }
 
-        /* Perform calibration */
+        /* Perform calibration with memory zeroing */
         calibration_response_t cal_response;
+        memset(&cal_response, 0, sizeof(cal_response));
+        
+        ESP_LOGI(TAG_UROS, "Starting calibration for %s with %d points", sensor_str, num_points);
         esp_err_t err = sensors_calibrate_generic(sensor_type, points, num_points, &cal_response);
 
         if (err == ESP_OK && cal_response.status == CAL_STATUS_SUCCESS) {
+            ESP_LOGI(TAG_UROS, "✓ Calibration SUCCESS: R²=%.4f, slope=%.6f, offset=%.6f", 
+                     cal_response.r_squared, cal_response.slope, cal_response.offset);
             snprintf(response_buffer, sizeof(response_buffer),
                      "{\"status\":\"success\",\"sensor\":\"%s\",\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,\"message\":\"%s\"}",
                      sensor_str, cal_response.slope, cal_response.offset,
                      cal_response.r_squared, cal_response.message);
         } else {
+            ESP_LOGE(TAG_UROS, "✗ Calibration FAILED: %s (err=%d)", cal_response.message, err);
             snprintf(response_buffer, sizeof(response_buffer),
                      "{\"status\":\"error\",\"sensor\":\"%s\",\"message\":\"%s\"}",
                      sensor_str, cal_response.message);

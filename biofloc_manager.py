@@ -8,12 +8,17 @@ import os
 import sys
 import subprocess
 import time
+import json
 from pathlib import Path
+from datetime import datetime
 
 # Load environment variables
 try:
     from dotenv import load_dotenv
     env_file = Path(__file__).parent / '.env'
+    if not env_file.exists():
+        # Try scripts/.env
+        env_file = Path(__file__).parent / 'scripts' / '.env'
     if env_file.exists():
         load_dotenv(env_file)
 except ImportError:
@@ -887,9 +892,106 @@ def read_sensor_voltage(sensor_id, device_id=None):
         traceback.print_exc()
         return None
 
+def save_calibration_to_mongodb(calibration_request, calibration_response):
+    """
+    Save calibration data to MongoDB devices collection (Digital Twin)
+    
+    Args:
+        calibration_request: Original calibration command (dict)
+        calibration_response: Response from ESP32 with calculated parameters (dict)
+    
+    Returns:
+        bool: True if saved successfully, False otherwise
+    """
+    try:
+        from pymongo import MongoClient
+        from pymongo.errors import ConnectionFailure, OperationFailure
+        
+        # Get MongoDB credentials from .env
+        mongodb_uri = os.getenv('MONGODB_URI')
+        mongodb_database = os.getenv('MONGODB_DATABASE', 'SistemasLab')
+        mongodb_devices_collection = os.getenv('MONGODB_COLLECTION_DEVICES', 'devices')
+        
+        if not mongodb_uri:
+            print_warning("MONGODB_URI no configurado - calibración solo guardada en ESP32")
+            return False
+        
+        # Connect to MongoDB
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+        db = client[mongodb_database]
+        devices_col = db[mongodb_devices_collection]
+        
+        # Verify connection
+        client.admin.command('ping')
+        
+        # Get active device ID
+        device_id = discover_active_devices()
+        if not device_id or len(device_id) == 0:
+            print_warning("No se pudo detectar el dispositivo activo")
+            return False
+        
+        # Use first device if multiple found
+        device_id = device_id[0] if isinstance(device_id, list) else device_id
+        
+        # Prepare calibration document
+        sensor_type = calibration_request.get('sensor')
+        calibration_doc = {
+            'fecha': datetime.utcnow().isoformat() + 'Z',
+            'slope': calibration_response.get('slope'),
+            'offset': calibration_response.get('offset'),
+            'r_squared': calibration_response.get('r_squared'),
+            'points': calibration_request.get('points', []),
+            'num_points': len(calibration_request.get('points', [])),
+            'status': calibration_response.get('status'),
+            'message': calibration_response.get('message')
+        }
+        
+        # Update device document
+        result = devices_col.update_one(
+            {'_id': device_id},
+            {
+                '$set': {
+                    f'calibracion.{sensor_type}': calibration_doc,
+                    'ultima_calibracion': datetime.utcnow().isoformat() + 'Z'
+                }
+            },
+            upsert=False  # Don't create if device doesn't exist
+        )
+        
+        if result.modified_count > 0 or result.matched_count > 0:
+            print_success(f"✓ Calibración guardada en MongoDB (Digital Twin)")
+            print_info(f"  Device: {device_id}")
+            print_info(f"  Sensor: {sensor_type}")
+            print_info(f"  R²: {calibration_doc['r_squared']:.4f}")
+            return True
+        else:
+            print_warning(f"Dispositivo {device_id} no encontrado en MongoDB")
+            return False
+            
+    except ConnectionFailure:
+        print_error("✗ No se pudo conectar a MongoDB Atlas")
+        return False
+    except OperationFailure as e:
+        print_error(f"✗ Error de MongoDB: {e}")
+        return False
+    except ImportError:
+        print_warning("pymongo no instalado - ejecuta: pip install pymongo")
+        return False
+    except Exception as e:
+        print_error(f"Error guardando calibración en MongoDB: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        try:
+            client.close()
+        except:
+            pass
+
 def publish_calibration_command(json_cmd):
     """
     Publish calibration command to /biofloc/calibration_cmd topic
+    AND save to MongoDB as Digital Twin backup
     
     Args:
         json_cmd: JSON string with calibration command
@@ -898,6 +1000,11 @@ def publish_calibration_command(json_cmd):
         bool: True if command was published successfully
     """
     try:
+        # Parse calibration data
+        import json as json_lib
+        cal_data = json_lib.loads(json_cmd)
+        sensor_type = cal_data.get('sensor')
+        
         # Escape single quotes in JSON for shell
         json_escaped = json_cmd.replace("'", "'\"'\"'")
         
@@ -937,9 +1044,8 @@ def publish_calibration_command(json_cmd):
                     print_info(f"Respuesta: {response_data}")
                     
                     # Parse response
-                    import json
                     try:
-                        response_json = json.loads(response_data)
+                        response_json = json_lib.loads(response_data)
                         if response_json.get('status') == 'success':
                             print_success(f"✓ {response_json.get('message', 'Éxito')}")
                             if 'slope' in response_json:
@@ -948,6 +1054,17 @@ def publish_calibration_command(json_cmd):
                                 print_info(f"  Offset: {response_json['offset']:.6f}")
                             if 'r_squared' in response_json:
                                 print_info(f"  R²: {response_json['r_squared']:.4f}")
+                            
+                            # ===== DIGITAL TWIN: Save to MongoDB =====
+                            save_calibration_to_mongodb(cal_data, response_json)
+                            
+                            return True
+                        else:
+                            print_error(f"✗ {response_json.get('message', 'Error desconocido')}")
+                            return False
+                    except json_lib.JSONDecodeError:
+                        print_warning("Respuesta recibida pero no se pudo parsear")
+                        return True
                             return True
                         else:
                             print_error(f"✗ {response_json.get('message', 'Error desconocido')}")

@@ -5,6 +5,119 @@ Todos los cambios notables de este proyecto serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [3.2.1] - 2026-02-17
+
+### Resumen
+**HOTFIX CRÍTICO + ARQUITECTURA DIGITAL TWIN:** Corregido crash PANIC durante calibración remota y agregado respaldo profesional de calibraciones en MongoDB Atlas. El ESP32 ahora procesa calibraciones sin crashes y MongoDB actúa como "single source of truth" para recuperación.
+
+### 🐛 Corregido - ESP32 PANIC Durante Calibración
+- **PROBLEMA CRÍTICO**: ESP32 crasheaba con PANIC al recibir comando de calibración de 3 puntos
+  - `Reset Reason: PANIC` después de enviar JSON
+  - Firmware se reiniciaba inmediatamente sin procesar calibración
+  - NVS no se actualizaba, perdiendo calibración completa
+- **ROOT CAUSE**: 
+  - `cJSON_GetObjectItem()` retornaba `NULL` sin validación
+  - `cJSON_IsNumber()` era llamado en puntero NULL → segmentation fault
+  - Struct `calibration_response_t` sin inicializar contenía basura
+  - Loop sin flag de error continuaba con datos corruptos
+- **SOLUCIÓN EN `main/main.c`**:
+  ```c
+  // ✅ Validación completa de punteros NULL
+  cJSON *point = cJSON_GetArrayItem(points_json, i);
+  if (!point) {
+      ESP_LOGE(TAG_UROS, "NULL point at index %d", i);
+      parse_error = true;
+      break;
+  }
+  
+  // ✅ Verificar existencia Y tipo antes de acceder
+  cJSON *voltage = cJSON_GetObjectItem(point, "voltage");
+  if (!voltage || !cJSON_IsNumber(voltage)) {
+      parse_error = true;
+      break;
+  }
+  
+  // ✅ Inicialización segura de struct
+  calibration_response_t cal_response;
+  memset(&cal_response, 0, sizeof(cal_response));
+  ```
+- **RESULTADO**: 
+  - ✅ ESP32 procesa calibración sin crashes
+  - ✅ Validación robusta de JSON con parse_error flag
+  - ✅ Logs detallados: "Point 1: 2.053V → 4.46 pH"
+  - ✅ Reset Reason permanece en POWER_ON (no PANIC)
+
+### ✨ Agregado - Arquitectura Digital Twin con MongoDB
+- **NUEVA FEATURE**: Respaldo automático de calibraciones en MongoDB Atlas
+  - Función `save_calibration_to_mongodb()` en `biofloc_manager.py`
+  - Calibración guardada en colección `devices` después de respuesta exitosa
+  - MongoDB como "single source of truth" (no solo NVS del ESP32)
+  - Permite recuperación si NVS se corrompe
+- **FLUJO**:
+  ```
+  1. CLI Manager lee voltajes (rclpy nativo)
+  2. Publica comando → /biofloc/calibration_cmd
+  3. ESP32 procesa y responde → /biofloc/calibration_status
+  4. CLI Manager guarda en MongoDB (Digital Twin) ✨
+  5. NVS + MongoDB sincronizados
+  ```
+- **SCHEMA DE MONGODB** (`devices` collection):
+  ```json
+  {
+    "_id": "biofloc_esp32_c8e0",
+    "calibracion": {
+      "ph": {
+        "fecha": "2026-02-17T12:45:00Z",
+        "slope": 6.2558,
+        "offset": -8.6328,
+        "r_squared": 0.9997,
+        "points": [
+          {"voltage": 2.053, "value": 4.46},
+          {"voltage": 2.49, "value": 7.2},
+          {"voltage": 2.914, "value": 9.85}
+        ],
+        "num_points": 3,
+        "status": "success"
+      }
+    },
+    "ultima_calibracion": "2026-02-17T12:45:00Z"
+  }
+  ```
+
+### ⚡ Mejorado - Logging y Diagnósticos
+- **Logs mejorados en ESP32**:
+  - Tamaño del mensaje JSON recibido
+  - Puntos de calibración con formato: "2.053V → 4.46 pH"
+  - Resultado de calibración con símbolos UTF-8: ✓/✗
+  - "Starting calibration for ph with 3 points"
+  - "✓ Calibration SUCCESS: R²=0.9997, slope=6.2558"
+- **Logs mejorados en Python**:
+  - "✓ Calibración guardada en MongoDB (Digital Twin)"
+  - "Device: biofloc_esp32_c8e0"
+  - "Sensor: ph"
+  - "R²: 0.9997"
+
+### 📚 Documentación
+- **Nuevo**: [docs/DIGITAL_TWIN_ARCHITECTURE.md](docs/DIGITAL_TWIN_ARCHITECTURE.md)
+  - Diagrama completo de arquitectura
+  - Flujo de calibración paso a paso
+  - Schema de MongoDB documentado
+  - Guía de troubleshooting (PANIC scenarios)
+  - Testing procedures
+  - Recovery mechanisms (futuro)
+
+### 🔧 Dependencias
+- **Python**: Agregado `import json` y `from datetime import datetime` en biofloc_manager.py
+- **MongoDB**: Requiere `pymongo` instalado (`pip install pymongo`)
+- **Variables de entorno**:
+  - `MONGODB_URI`: Conexión a MongoDB Atlas
+  - `MONGODB_DATABASE`: Nombre de base de datos (default: SistemasLab)
+  - `MONGODB_COLLECTION_DEVICES`: Colección de dispositivos (default: devices)
+
+### 🐛 Conocido
+- **Degradación graceful**: Si MongoDB no está configurado, calibración funciona normal (solo NVS)
+- **Advertencia**: "MONGODB_URI no configurado - calibración solo guardada en ESP32"
+
 ## [3.1.1] - 2026-02-12
 
 ### Resumen
