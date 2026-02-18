@@ -279,7 +279,7 @@ def calibrate_remote():
     """
     print_header("Calibración Remota de Sensores")
     
-    print_info("Sistema de calibración remota v3.1.0 (Multi-Device)")
+    print_info("Sistema de calibración remota v3.6.2 (Multi-Device)")
     print_info("Compatible con: pH, Temperatura, y sensores futuros")
     print_info("")
     print_info("Ventajas:")
@@ -1190,14 +1190,17 @@ def publish_calibration_command(json_cmd, device_id=None):
         time.sleep(2)
         
         # ── Step 2: Publish calibration command ──
-        json_escaped = json_cmd.replace("'", "'\"'\"'")
+        # CRITICAL FIX v3.6.2: Escape double quotes for shell, preserve JSON structure
+        # Old method used single quotes which caused ROS2 to parse as YAML, stripping
+        # all double quotes from JSON keys/values, breaking cJSON parsing in ESP32
+        json_escaped = json_cmd.replace('"', '\\"')
         
         pub_cmd = [
             'bash', '-c',
             f'source /opt/ros/jazzy/setup.bash && '
             f'source ~/microros_ws/install/local_setup.bash && '
-            f"ros2 topic pub --once /biofloc/calibration_cmd "
-            f"std_msgs/msg/String \"data: '{json_escaped}'\""
+            f'ros2 topic pub --once /biofloc/calibration_cmd '
+            f'std_msgs/msg/String "data: \\\"{json_escaped}\\\""'
         ]
         
         print_info(f"Enviando comando al ESP32: {json_cmd[:100]}{'...' if len(json_cmd) > 100 else ''}")
