@@ -106,6 +106,20 @@ void uros_manager_reconnect_forever(void);
 void uros_manager_spin_once(uint32_t timeout_ms);
 
 /**
+ * @brief Keep-alive automático - mantiene la sesión viva sin publicar datos reales
+ * 
+ * Debe llamarse periódicamente (~20s). Si ha pasado demasiado tiempo sin
+ * actividad, envía un ping silencioso para evitar timeout del Gateway/Agent.
+ * 
+ * NOTA: Esta es la solución robusta a los timeouts de ~30s en el Gateway.
+ * Sin este mecanismo, la sesión XRCE-DDS se cierra por inactividad.
+ * 
+ * @return ESP_OK si keep-alive ejecutado
+ * @return ESP_ERR_INVALID_STATE si micro-ROS no inicializado
+ */
+esp_err_t uros_manager_keep_alive(void);
+
+/**
  * @brief Deinicializa subsistema micro-ROS y libera recursos
  */
 void uros_manager_deinit(void);

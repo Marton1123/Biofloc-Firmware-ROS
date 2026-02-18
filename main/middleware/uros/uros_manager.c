@@ -18,6 +18,7 @@
 
 #include <string.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -73,6 +74,9 @@ typedef struct {
     bool initialized;
     uros_state_t state;
     uros_calibration_callback_t calibration_callback;
+    
+    // Keep-alive: timestamp de última actividad (ms desde boot)
+    uint32_t last_activity_ms;
     
 } uros_manager_state_t;
 
@@ -426,6 +430,41 @@ void uros_manager_spin_once(uint32_t timeout_ms)
     }
     
     rclc_executor_spin_some(&s_uros.executor, RCL_MS_TO_NS(timeout_ms));
+    s_uros.last_activity_ms = esp_timer_get_time() / 1000;  // Registrar actividad
+}
+
+/**
+ * @brief Keep-alive automático: mantiene sesión XRCE-DDS viva
+ * 
+ * PROBLEMA RESUELTO: Gateway/Agent cierran sesiones inactivas cada ~30s
+ * SOLUCIÓN: Ping silencioso cada ~20s sin publicar datos reales
+ * 
+ * Permite que calibración (u otras ops) funcione incluso con desconexiones
+ * temporales, porque siempre hay tráfico UDP antes del timeout.
+ */
+esp_err_t uros_manager_keep_alive(void)
+{
+    if (!s_uros.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    uint32_t current_ms = esp_timer_get_time() / 1000;
+    uint32_t elapsed_ms = current_ms - s_uros.last_activity_ms;
+    
+    // Si han pasado > 20s sin actividad, hacer ping silencioso
+    if (elapsed_ms > 20000) {
+        ESP_LOGD(TAG_UROS, "🔄 Keep-alive: %lums sin actividad, enviando ping silencioso", (unsigned long)elapsed_ms);
+        
+        if (uros_manager_ping_agent()) {
+            s_uros.last_activity_ms = current_ms;
+            return ESP_OK;
+        } else {
+            ESP_LOGW(TAG_UROS, "⚠️ Keep-alive ping falló - posible desconexión");
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    
+    return ESP_OK;
 }
 
 void uros_manager_deinit(void)

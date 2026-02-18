@@ -92,7 +92,7 @@
 #define JSON_BUFFER_SIZE        512
 #define CAL_CMD_BUFFER_SIZE     1024    /* Subscriber buffer: must be > largest incoming JSON */
 #define CAL_RESPONSE_SIZE       512
-#define PING_CHECK_INTERVAL_MS  8000    /* CRITICAL: Must be < watchdog timeout (safety margin: 8s < 20s) */
+/* PING_CHECK_INTERVAL_MS definido en core/config.h */
 #define RECONNECT_DELAY_INITIAL 3000   /* Delay inicial: 3s */
 #define RECONNECT_DELAY_MAX     60000  /* Max delay: 60s (aumentado de 30s) */
 #define RECONNECT_FOREVER       true   /* CRÍTICO: Nunca reiniciar, reconectar infinitamente */
@@ -224,6 +224,8 @@ static void micro_ros_task(void *arg)
 
     uint32_t ping_counter = 0;
     const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;
+    uint32_t keep_alive_counter = 0;
+    const uint32_t keep_alive_interval = 200;  // Llamar keep_alive cada ~2 segundos (200 * 10ms)
 
     // Main spin loop with connection monitoring
     while (1) {
@@ -232,6 +234,15 @@ static void micro_ros_task(void *arg)
 
         // Spin executor
         uros_manager_spin_once(100);
+
+        // Keep-alive automático: mantiene sesión viva contra timeouts
+        if (++keep_alive_counter >= keep_alive_interval) {
+            keep_alive_counter = 0;
+            esp_err_t ka_ret = uros_manager_keep_alive();
+            if (ka_ret != ESP_OK && ka_ret != ESP_ERR_INVALID_STATE) {
+                ESP_LOGD(TAG_UROS, "Keep-alive check triggered");
+            }
+        }
 
         // Periodic Agent ping
         if (++ping_counter >= ping_interval) {

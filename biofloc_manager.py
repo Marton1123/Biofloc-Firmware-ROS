@@ -1245,7 +1245,7 @@ def publish_calibration_command(json_cmd, device_id=None):
             'bash', '-c',
             'source /opt/ros/jazzy/setup.bash && '
             'source ~/microros_ws/install/local_setup.bash && '
-            'timeout 30 ros2 topic echo --once --full-length '
+            'timeout 120 ros2 topic echo --once --full-length '
             '/biofloc/calibration_status std_msgs/msg/String 2>&1'
         ]
         
@@ -1280,16 +1280,18 @@ def publish_calibration_command(json_cmd, device_id=None):
             ack_process.wait()
             return False
         
-        print_info("✓ Comando enviado, esperando ACK del ESP32 (timeout: 30s)...")
+        print_info("✓ Comando enviado, esperando ACK del ESP32 (timeout: 120s - incluye reconexión si falla)...")
         
         # ── Step 3: Wait for ACK response ──
         try:
-            ack_stdout, ack_stderr = ack_process.communicate(timeout=30)
+            ack_stdout, ack_stderr = ack_process.communicate(timeout=120)
         except subprocess.TimeoutExpired:
             ack_process.kill()
             ack_process.wait()
-            print_error("✗ TIMEOUT: No se recibió ACK del ESP32 en 30 segundos")
-            print_error("  El ESP32 pudo haber sufrido un PANIC y reiniciado")
+            print_error("✗ TIMEOUT: No se recibió ACK del ESP32 en 120 segundos")
+            print_error("  Posibles causas:")
+            print_error("  - Pérdida de conexión WiFi persistente")
+            print_error("  - El ESP32 sufrió un PANIC y reinició (verifica logs)")
             print_info("  Verifica los logs del ESP32 con: idf.py -p /dev/ttyUSB0 monitor")
             print_info("  La calibración NO se guardó (ni en NVS ni en MongoDB)")
             return False
