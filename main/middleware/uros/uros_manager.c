@@ -132,6 +132,13 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
     
     ESP_LOGI(TAG_UROS, "Initializing uROS manager...");
     
+    // CRITICAL: Clean up any previous ROS2 resources from failed init or reconnection
+    // This prevents "double init" errors like "rcl_init_options_init() rc=1"
+    if (s_uros.initialized) {
+        ESP_LOGD(TAG_UROS, "Cleaning up previous resources before re-init");
+        uros_manager_deinit();
+    }
+    
     // Registrar callback ANTES de crear executor (evita race condition)
     s_uros.calibration_callback = calibration_callback;
     if (calibration_callback) {
@@ -192,19 +199,20 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
         "sensor_data"
     ));
     
-    RCCHECK(rclc_publisher_init_default(
-        &s_uros.calibration_status_pub,
-        &s_uros.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "calibration_status"
-    ));
-    
-    RCCHECK(rclc_publisher_init_default(
-        &s_uros.config_status_pub,
-        &s_uros.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "config_status"
-    ));
+    // DEBUG: Temporarily removed other publishers to isolate issue
+    // RCCHECK(rclc_publisher_init_default(
+    //     &s_uros.calibration_status_pub,
+    //     &s_uros.node,
+    //     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+    //     "calibration_status"
+    // ));
+    // 
+    // RCCHECK(rclc_publisher_init_default(
+    //     &s_uros.config_status_pub,
+    //     &s_uros.node,
+    //     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+    //     "config_status"
+    // ));
     
     // Subscribers
     ESP_LOGI(TAG_UROS, "Creating subscribers...");
@@ -396,8 +404,12 @@ void uros_manager_reconnect_forever(void)
         
         if (uros_manager_ping_agent()) {
             ESP_LOGI(TAG_UROS, "✓ Agent reconnected!");
-            // CRÍTICO: Limpiar initialized flag para permitir reinit completo
-            s_uros.initialized = false;
+            // CRITICAL: Must finalize ALL previous ROS2 objects before re-init
+            // or rcl_init_options_init() will fail with rc=1
+            if (s_uros.initialized) {
+                ESP_LOGI(TAG_UROS, "Cleaning up previous ROS2 resources...");
+                uros_manager_deinit();
+            }
             break;
         }
         
@@ -423,8 +435,9 @@ void uros_manager_deinit(void)
     ESP_LOGI(TAG_UROS, "Deinitializing uROS manager...");
     
     // Cleanup (orden inverso a inicialización)
-    rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
-    rcl_publisher_fini(&s_uros.calibration_status_pub, &s_uros.node);
+    // DEBUG: Only cleanup sensor_data_pub since others are disabled
+    // rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
+    // rcl_publisher_fini(&s_uros.calibration_status_pub, &s_uros.node);
     rcl_publisher_fini(&s_uros.sensor_data_pub, &s_uros.node);
     rcl_subscription_fini(&s_uros.config_cmd_sub, &s_uros.node);
     rcl_subscription_fini(&s_uros.calibration_cmd_sub, &s_uros.node);
