@@ -128,13 +128,13 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
         ESP_LOGI(TAG_UROS, "✓ Calibration callback registered");
     }
     
+    // CRITICAL: Initialize allocator FIRST (needed for all subsequent operations)
+    s_uros.allocator = rcl_get_default_allocator();
+    
     // Configurar estado
     s_uros.state = UROS_STATE_CONNECTING;
     app_state_set_uros(UROS_STATE_CONNECTING);
-    
-    // Allocator
-    s_uros.allocator = rcl_get_default_allocator();
-    
+
     // Init options
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, s_uros.allocator));
