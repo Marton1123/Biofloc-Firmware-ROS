@@ -55,7 +55,7 @@
  * Configuration Constants
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "3.6.0"
+#define FIRMWARE_VERSION        "3.6.4"
 
 /* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
 #define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
@@ -77,7 +77,7 @@
 #define CONFIG_MICRO_ROS_APP_TASK_PRIO 5
 #endif
 
-#define SENSOR_TASK_STACK       8192
+#define SENSOR_TASK_STACK       12288   /* Increased from 8KB to 12KB (v3.6.4) to prevent stack overflow during rcl_publish() + cJSON */
 #define SENSOR_TASK_PRIO        4
 #define JSON_BUFFER_SIZE        512
 #define CAL_CMD_BUFFER_SIZE     1024    /* Subscriber buffer: must be > largest incoming JSON */
@@ -646,12 +646,21 @@ static void calibration_callback(const void *msgin)
     /* Static buffers — off the stack to reduce pressure on the 20KB task stack */
     static char safe_buffer[CAL_CMD_BUFFER_SIZE];
     static char response[CAL_RESPONSE_SIZE];
+    
+    /* v3.6.4: Zero buffers to prevent data corruption from previous calibrations */
+    memset(safe_buffer, 0, sizeof(safe_buffer));
+    memset(response, 0, sizeof(response));
 
     ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-    ESP_LOGI(TAG_UROS, "  CALIBRATION CALLBACK INVOKED");
+    ESP_LOGI(TAG_UROS, "  CALIBRATION CALLBACK INVOKED (v3.6.4)");
     ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
     ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
-    ESP_LOGI(TAG_UROS, "Free stack: %u bytes", uxTaskGetStackHighWaterMark(NULL));
+    ESP_LOGI(TAG_UROS, "Free stack (micro_ros_task): %u bytes", uxTaskGetStackHighWaterMark(NULL));
+    
+    /* v3.6.4: Also check sensor_task stack (potential overflow risk) */
+    if (g_sensor_task_handle) {
+        ESP_LOGI(TAG_UROS, "Free stack (sensor_task): %u bytes", uxTaskGetStackHighWaterMark(g_sensor_task_handle));
+    }
 
     /* Step 1: Safe receive with null-termination */
     ESP_LOGI(TAG_UROS, "[1/4] Receiving message...");
@@ -961,7 +970,7 @@ void app_main(void)
         SENSOR_TASK_STACK,
         NULL,
         SENSOR_TASK_PRIO,
-        NULL,
+        &g_sensor_task_handle,  /* v3.6.4: Save handle for stack monitoring */
         0  /* PRO_CPU */
     );
 }

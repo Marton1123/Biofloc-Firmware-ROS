@@ -279,7 +279,7 @@ def calibrate_remote():
     """
     print_header("Calibración Remota de Sensores")
     
-    print_info("Sistema de calibración remota v3.6.2 (Multi-Device)")
+    print_info("Sistema de calibración remota v3.6.4 (Multi-Device)")
     print_info("Compatible con: pH, Temperatura, y sensores futuros")
     print_info("")
     print_info("Ventajas:")
@@ -509,6 +509,42 @@ def calibrate_remote():
         points.append({"voltage": voltage, "value": value})
         print_success(f"✓ Punto {i+1} registrado: {voltage:.3f}V → {value} {get_sensor_unit(sensor_id)}")
         print("")
+        
+        # v3.6.4: Verificar que ESP32 sigue activo antes del siguiente punto
+        if i < num_points - 1:  # No verificar después del último punto
+            print_info("Verificando salud del ESP32...")
+            time.sleep(2)  # Esperar a que publique un mensaje más
+            
+            # Intentar leer un mensaje para confirmar que está activo
+            test_voltage = read_sensor_voltage(sensor_id, device_id=selected_device, timeout=8)
+            if test_voltage is None:
+                print_error(f"⚠ ALERTA: ESP32 dejó de responder después del punto {i+1}")
+                print_warning("Posibles causas:")
+                print_warning("  - ESP32 sufrió PANIC y se reinició")
+                print_warning("  - Pérdida de conexión WiFi")
+                print_warning("  - micro-ROS Agent desconectado")
+                print_info("")
+                print_info(f"Puntos capturados hasta ahora: {i+1}/{num_points}")
+                
+                retry = input(f"{Colors.WARNING}¿Esperar a que ESP32 se recupere? (s/N): {Colors.ENDC}").strip().lower()
+                if retry == 's':
+                    print_info("Esperando 30 segundos a que ESP32 se reinicie...")
+                    time.sleep(30)
+                    
+                    # Verificar de nuevo
+                    test_voltage = read_sensor_voltage(sensor_id, device_id=selected_device, timeout=10)
+                    if test_voltage is None:
+                        print_error("ESP32 no se recuperó - cancelando calibración")
+                        print_info("Recomendación: Conecta ESP32 por USB y revisa logs con:")
+                        print_info("  idf.py -p /dev/ttyUSB0 monitor")
+                        return
+                    else:
+                        print_success("✓ ESP32 recuperado - continuando calibración")
+                else:
+                    print_error("Calibración cancelada por el usuario")
+                    return
+            else:
+                print_success(f"✓ ESP32 activo (voltaje actual: {test_voltage:.3f}V)")
     
     # Confirm calibration
     print(f"{Colors.BOLD}═══ Resumen de Calibración ═══{Colors.ENDC}")
@@ -767,9 +803,9 @@ def get_sensor_unit(sensor_id):
     }
     return units.get(sensor_id, '')
 
-def read_sensor_voltage(sensor_id, device_id=None):
+def read_sensor_voltage(sensor_id, device_id=None, timeout=10):
     """
-    Read sensor voltage with scientific stabilization (v3.6.0)
+    Read sensor voltage with scientific stabilization (v3.6.4)
     
     METHODOLOGY (per lab professor):
     - Biological sensors take 3-7 minutes to stabilize
@@ -783,6 +819,7 @@ def read_sensor_voltage(sensor_id, device_id=None):
     Args:
         sensor_id: Type of sensor ('ph', 'temperature', etc.)
         device_id: Specific device to read from (None = first message)
+        timeout: Timeout in seconds for first message (default: 10s)
     
     Returns:
         float: AVERAGED voltage after stabilization, or None if failed
@@ -876,10 +913,10 @@ def read_sensor_voltage(sensor_id, device_id=None):
         
         # Wait for first message to confirm topic is active
         try:
-            first_msg = msg_queue.get(timeout=10)
+            first_msg = msg_queue.get(timeout=timeout)
         except queue.Empty:
             stop_event.set()
-            print_error("Timeout: No se recibieron mensajes en 10s")
+            print_error(f"Timeout: No se recibieron mensajes en {timeout}s")
             print_info("Verifica que:")
             print_info("  - El ESP32 esté conectado y publicando datos")
             print_info("  - El micro-ROS Agent esté activo")
@@ -919,44 +956,35 @@ def read_sensor_voltage(sensor_id, device_id=None):
         
         try:
             while True:
-                # Get next message with short timeout
+                # Get next message (ESP32 publishes every ~4s)
                 try:
-                    msg_block = msg_queue.get(timeout=1)
+                    msg_block = msg_queue.get(timeout=8)
                 except queue.Empty:
-                    # No new message, just update display
-                    elapsed = time.time() - start_time
-                    if len(voltage_window) > 0:
-                        current_v = voltage_window[-1]
+                    # No new message in 8s - ESP32 likely disconnected
+                    print()
+                    print_warning(f"⚠ No hay nuevos datos en 8s - ESP32 desconectado?")
+                    
+                    if len(voltage_window) >= min_samples:
                         median_v = statistics.median(voltage_window)
-                        std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
+                        elapsed = time.time() - start_time
+                        print_info(f"  Voltaje mediana actual: {median_v:.4f}V")
+                        print_info(f"  Muestras: {len(voltage_window)}, Tiempo: {int(elapsed)}s")
                         
-                        # Check stability
-                        is_stable = (elapsed >= min_stable_time_sec and std_dev < max_std_dev)
+                        if elapsed < min_stable_time_sec:
+                            print_warning(f"  ⚠ Solo {int(elapsed)}s < {min_stable_time_sec}s mínimo")
                         
-                        if is_stable:
-                            stable_readings += 1
-                            status = f"{Colors.OKGREEN}ESTABLE{Colors.ENDC} (✓ {stable_readings})"
-                        elif elapsed >= min_stable_time_sec:
-                            status = f"{Colors.WARNING}Esperando σ<{max_std_dev}V{Colors.ENDC}"
-                        else:
-                            remain_sec = int(min_stable_time_sec - elapsed)
-                            status = f"{Colors.OKCYAN}Estabilizando... ({remain_sec}s){Colors.ENDC}"
-                        
-                        print(f"\r{int(elapsed):>7}s | {current_v:>9.4f}V | {median_v:>9.4f}V | {std_dev:>11.6f}V | {len(voltage_window):>10} | {status:<40}", end='', flush=True)
-                        
-                        # Auto-finish if stable for 3 consecutive readings
-                        if stable_readings >= 3:
-                            print()  # New line
-                            print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
-                            print_success(f"✓ ESTABILIZACIÓN COMPLETADA AUTOMÁTICAMENTE")
-                            print_info(f"  Voltaje mediana: {median_v:.4f}V (más robusto que promedio)")
-                            print_info(f"  Desviación estándar: {std_dev:.6f}V")
-                            print_info(f"  Tiempo total: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
-                            print_info(f"  Muestras procesadas: {len(voltage_window)}")
+                        confirm = input(f"\n{Colors.WARNING}¿Usar esta mediana de todas formas? (s/N): {Colors.ENDC}").strip().lower()
+                        if confirm == 's':
                             stop_event.set()
                             return median_v
-                    
-                    continue
+                        else:
+                            print_error("Calibración cancelada - ESP32 no responde")
+                            stop_event.set()
+                            return None
+                    else:
+                        print_error(f"✗ Timeout sin suficientes muestras ({len(voltage_window)}/{min_samples})")
+                        stop_event.set()
+                        return None
                 
                 # Parse new message
                 try:
@@ -989,7 +1017,40 @@ def read_sensor_voltage(sensor_id, device_id=None):
                     # Add to sliding window
                     voltage_window.append(voltage)
                     sample_count += 1
-                    stable_readings = 0  # Reset stable counter on new reading
+                    
+                    # Calculate current metrics
+                    elapsed = time.time() - start_time
+                    current_v = voltage
+                    median_v = statistics.median(voltage_window)
+                    std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
+                    
+                    # Check stability (on EACH new reading, not timeout)
+                    is_stable = (elapsed >= min_stable_time_sec and std_dev < max_std_dev)
+                    
+                    if is_stable:
+                        stable_readings += 1
+                        status = f"{Colors.OKGREEN}ESTABLE{Colors.ENDC} (✓ {stable_readings})"
+                    else:
+                        stable_readings = 0  # Reset only if NOT stable
+                        if elapsed >= min_stable_time_sec:
+                            status = f"{Colors.WARNING}Esperando σ<{max_std_dev}V{Colors.ENDC}"
+                        else:
+                            remain_sec = int(min_stable_time_sec - elapsed)
+                            status = f"{Colors.OKCYAN}Estabilizando... ({remain_sec}s){Colors.ENDC}"
+                    
+                    print(f"\r{int(elapsed):>7}s | {current_v:>9.4f}V | {median_v:>9.4f}V | {std_dev:>11.6f}V | {len(voltage_window):>10} | {status:<40}", end='', flush=True)
+                    
+                    # Auto-finish if stable for 3 consecutive NEW readings (12s = 3 × 4s publish rate)
+                    if stable_readings >= 3:
+                        print()  # New line
+                        print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
+                        print_success(f"✓ ESTABILIZACIÓN COMPLETADA AUTOMÁTICAMENTE")
+                        print_info(f"  Voltaje mediana: {median_v:.4f}V (más robusto que promedio)")
+                        print_info(f"  Desviación estándar: {std_dev:.6f}V")
+                        print_info(f"  Tiempo total: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
+                        print_info(f"  Muestras procesadas: {len(voltage_window)}")
+                        stop_event.set()
+                        return median_v
                     
                 except (json_lib.JSONDecodeError, KeyError, AttributeError):
                     continue
@@ -1057,6 +1118,12 @@ def save_calibration_to_mongodb(calibration_request, calibration_response, devic
     """
     Save calibration data to MongoDB devices collection (Digital Twin)
     ONLY called after ESP32 confirms successful NVS save via ACK.
+    
+    ARQUITECTURA CRÍTICA:
+    - ESP32 es la FUENTE DE VERDAD (guarda en NVS interno)
+    - MongoDB es un "Digital Twin" OPCIONAL para monitoreo/análisis
+    - El ESP32 NUNCA lee de MongoDB - es 100% autónomo
+    - Si MongoDB falla, la calibración YA está guardada en ESP32
     
     Args:
         calibration_request: Original calibration command (dict)
