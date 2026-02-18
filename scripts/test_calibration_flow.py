@@ -9,7 +9,12 @@ import time
 
 def run_cmd(cmd, timeout=10):
     """Run command and return output"""
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=True)
+    result = subprocess.run(
+        ['bash', '-c', cmd], 
+        capture_output=True, 
+        text=True, 
+        timeout=timeout
+    )
     return result.stdout, result.stderr, result.returncode
 
 print("="*70)
