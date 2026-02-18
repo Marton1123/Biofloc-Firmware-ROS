@@ -165,7 +165,28 @@ void sensor_task(void *arg)
                     }
                 }
             } else if (app_state_is_calibrating()) {
-                ESP_LOGD(TAG_SENSOR, "⏸ Sampling paused during calibration");
+                /* CRÍTICO: Seguir publicando datos LIGEROS durante calibración
+                   para evitar que Agent cierre la sesión por inactividad.
+                   
+                   Problema v4.0.0: Sin publicaciones → Agent timeout ~30s
+                   Solución: Publicar datos raw cada ~10s durante calibración
+                */
+                static uint32_t calib_publish_counter = 0;
+                if (++calib_publish_counter >= 10) {  // ~10 ciclos * 4s = 40s, pero se publica cada lectura
+                    calib_publish_counter = 0;
+                    
+                    int json_len = sensors_to_json(&sensor_data, json_buffer,
+                                                   sizeof(json_buffer),
+                                                   current_state->device_info.device_id,
+                                                   DEVICE_LOCATION);
+                    
+                    if (json_len > 0) {
+                        ESP_LOGD(TAG_SENSOR, "⏸ [KEEP-ALIVE] Publishing raw data during calibration: pH=%.2f, Temp=%.1f",
+                                 sensor_data.ph.value, sensor_data.temperature.value);
+                        
+                        uros_manager_publish_sensor_data(json_buffer, (size_t)json_len);
+                    }
+                }
             }
         } else {
             ESP_LOGW(TAG_SENSOR, "Sensor read failed (err=%d)", ret);
