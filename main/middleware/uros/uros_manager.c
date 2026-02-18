@@ -79,6 +79,16 @@ typedef struct {
 static uros_manager_state_t s_uros = {0};
 
 /* ============================================================================
+ * FORWARD DECLARATIONS - HELPERS PRIVADOS
+ * ============================================================================ */
+
+/**
+ * @brief Ping Agent con opciones RMW específicas (UDP address, etc)
+ * @note Uso interno - llamado durante init
+ */
+static bool uros_manager_ping_agent_with_options(rmw_init_options_t *rmw_options);
+
+/* ============================================================================
  * HELPERS PRIVADOS
  * ============================================================================ */
 
@@ -135,7 +145,7 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
     s_uros.state = UROS_STATE_CONNECTING;
     app_state_set_uros(UROS_STATE_CONNECTING);
 
-    // Init options
+    // Init options (Usar ANTES de ping para que ping use las mismas opciones)
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, s_uros.allocator));
     
@@ -151,8 +161,8 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
     ESP_LOGI(TAG_UROS, "Pinging Agent %s:%s (timeout: %dms, retries: %d)",
              AGENT_IP, port_str, PING_TIMEOUT_MS, PING_RETRIES);
     
-    // Ping Agent
-    if (!uros_manager_ping_agent()) {
+    // Ping Agent CON las opciones UDP configuradas (CRITICAL)
+    if (!uros_manager_ping_agent_with_options(rmw_options)) {
         ESP_LOGW(TAG_UROS, "⚠️ Agent unreachable - will reconnect");
         s_uros.state = UROS_STATE_DISCONNECTED;
         app_state_set_uros(UROS_STATE_DISCONNECTED);
@@ -318,6 +328,29 @@ esp_err_t uros_manager_publish_calibration_status(const char *json_response, siz
 uros_state_t uros_manager_get_state(void)
 {
     return s_uros.state;
+}
+
+/**
+ * @brief Ping Agent con opciones RMW específicas (UDP address, etc)
+ * @note Uso interno - llamado durante init
+ */
+static bool uros_manager_ping_agent_with_options(rmw_init_options_t *rmw_options)
+{
+    for (int attempt = 1; attempt <= PING_RETRIES; attempt++) {
+        ESP_LOGD(TAG_UROS, "Ping attempt %d/%d", attempt, PING_RETRIES);
+        
+        // CRITICAL: Use ping_agent_options() con rmw_options configuradas
+        rmw_ret_t ret = rmw_uros_ping_agent_options(PING_TIMEOUT_MS, 1, rmw_options);
+        if (ret == RMW_RET_OK) {
+            return true;
+        }
+        
+        if (attempt < PING_RETRIES) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+    
+    return false;
 }
 
 bool uros_manager_ping_agent(void)
