@@ -530,8 +530,6 @@ def calibrate_remote():
                 print_info("2. Espera 30-60 segundos para estabilización")
                 print_info("3. Mide con termómetro de referencia (TP101 o similar)")
             print("")
-            else:
-                print_success(f"✓ ESP32 activo (voltaje actual: {test_voltage:.3f}V)")
     
     # Confirm calibration
     print(f"{Colors.BOLD}═══ Resumen de Calibración ═══{Colors.ENDC}")
