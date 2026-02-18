@@ -1,14 +1,6 @@
 /**
  * @file sensor_task.c
- * @brief Implementación de la tarea de muestreo de sensores
- * @version 4.0.0
- * 
- * Responsabilidades:
- * - Muestreo periódico de sensores (pH, temperatura)
- * - Agregación de datos en buffer
- * - Publicación basada en configuración dinámica
- * - Pausa automática durante calibración
- * - Monitoreo de watchdog
+ * @brief Implementación corregida y robusta (v4.1.0)
  */
 
 #include "sensor_task.h"
@@ -23,21 +15,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* ============================================================================
- * CONSTANTES PRIVADAS
- * ============================================================================ */
-
 #define JSON_BUFFER_SIZE 512
 
-/* ============================================================================
- * VARIABLES PRIVADAS
- * ============================================================================ */
-
 static TaskHandle_t s_sensor_task_handle = NULL;
-
-/* ============================================================================
- * API PÚBLICA - IMPLEMENTACIÓN
- * ============================================================================ */
 
 TaskHandle_t sensor_task_get_handle(void)
 {
@@ -47,151 +27,87 @@ TaskHandle_t sensor_task_get_handle(void)
 void sensor_task(void *arg)
 {
     (void)arg;
-
-    /* Guardar handle para monitoreo externo */
     s_sensor_task_handle = xTaskGetCurrentTaskHandle();
 
-    ESP_LOGI(TAG_SENSOR, "Sensor task started");
-    ESP_LOGI(TAG_SENSOR, "Sample interval: %d ms", SAMPLE_INTERVAL_MS);
-    ESP_LOGI(TAG_SENSOR, "Location: %s", DEVICE_LOCATION);
-    
-    /* Suscribirse al Task Watchdog Timer (CRÍTICO para detección de estado zombie) */
-    ESP_LOGI(TAG_SENSOR, "Subscribing to watchdog (timeout: %ds)", WATCHDOG_TIMEOUT_SEC);
-    esp_err_t wdt_err = esp_task_wdt_add(NULL);
-    if (wdt_err == ESP_OK) {
-        ESP_LOGI(TAG_SENSOR, "✓ Watchdog subscribed - will reset if blocked > %ds", WATCHDOG_TIMEOUT_SEC);
-    } else {
-        ESP_LOGW(TAG_SENSOR, "Failed to subscribe to watchdog (err=%d)", wdt_err);
-    }
+    ESP_LOGI(TAG_SENSOR, "Sensor task started (v4.1.0 - Spin Fix)");
 
-    /* Inicializar sensores */
-    esp_err_t ret = sensors_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG_SENSOR, "Failed to initialize sensors (err=%d)", ret);
+    /* Watchdog */
+    esp_task_wdt_add(NULL);
+
+    /* Init Sensores */
+    if (sensors_init() != ESP_OK) {
+        ESP_LOGE(TAG_SENSOR, "Failed to init sensors");
         vTaskDelete(NULL);
         return;
     }
 
-    /* Aplicar calibración de pH (calibración 3 puntos con pH 4.01, 6.86, 9.18) */
-    ret = sensors_calibrate_ph_manual(2.559823f, 0.469193f);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG_SENSOR, "✓ pH calibration applied: R²=0.9997, max_err=0.049pH");
-    } else {
-        ESP_LOGW(TAG_SENSOR, "Failed to apply pH calibration");
-    }
+    /* Calibración Inicial (Hack pH Manual) */
+    sensors_calibrate_ph_manual(2.559823f, 0.469193f);
 
-    /* Obtener información del dispositivo */
+    /* Init Info & Aggregator */
     app_state_t *state = (app_state_t*)app_state_get();
     sensors_get_device_info(state->device_info.device_id, 
                             state->device_info.mac_address, 
                             state->device_info.ip_address);
+    data_aggregator_init();
 
+    /* Buffer en Stack (Más seguro que static si hay stack suficiente) */
     char json_buffer[JSON_BUFFER_SIZE];
     sensors_data_t sensor_data;
-    uint32_t watchdog_counter = 0;
-    
-    /* Inicializar agregador de datos */
-    ESP_LOGI(TAG_SENSOR, "Initializing data aggregator...");
-    if (data_aggregator_init() != ESP_OK) {
-        ESP_LOGE(TAG_SENSOR, "Failed to initialize data aggregator");
-    }
 
-    /* Esperar a que micro-ROS esté listo (CON TIMEOUT para evitar deadlock) */
+    /* Espera Agente (con timeout y watchdog) */
     uint32_t wait_cycles = 0;
-    const uint32_t MAX_WAIT_CYCLES = 120;  /* 120 * 500ms = 60 segundos timeout */
-    
-    while (!state->uros_ready && wait_cycles < MAX_WAIT_CYCLES) {
-        if (wait_cycles % 20 == 0) {  /* Log cada 10 segundos (20 * 500ms) */
-            ESP_LOGI(TAG_SENSOR, "Waiting for micro-ROS Agent (attempt %lu/120)...", wait_cycles);
-        }
+    while (!state->uros_ready && wait_cycles < 120) {
+        if (wait_cycles % 10 == 0) ESP_LOGI(TAG_SENSOR, "Waiting for Agent...");
+        
+        /* CRÍTICO: Hacer spin aquí también para procesar el handshake inicial */
+        uros_manager_spin_once(10); 
+        
         vTaskDelay(pdMS_TO_TICKS(500));
+        esp_task_wdt_reset();
         wait_cycles++;
-        
-        /* Alimentar watchdog incluso mientras espera */
-        esp_task_wdt_reset();
-    }
-    
-    if (!state->uros_ready) {
-        ESP_LOGW(TAG_SENSOR, "⚠️ Timeout waiting for micro-ROS Agent - continuing anyway");
-        ESP_LOGW(TAG_SENSOR, "   Ensure Agent is running: ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888");
-    } else {
-        ESP_LOGI(TAG_SENSOR, "✓ micro-ROS Agent is ready");
     }
 
-    ESP_LOGI(TAG_SENSOR, "Starting sensor readings");
+    ESP_LOGI(TAG_SENSOR, "Starting main loop");
 
-    /* Loop principal de muestreo */
     while (1) {
-        /* Alimentar watchdog al inicio de cada iteración (CRÍTICO) */
         esp_task_wdt_reset();
-        
-        /* Obtener configuración dinámica actual */
-        const app_state_t *current_state = app_state_get();
-        uint32_t current_sample_interval = current_state->sensor_config.sample_interval_ms;
-        
-        /* Leer sensores */
-        ret = sensors_read_all(&sensor_data);
 
-        if (ret == ESP_OK) {
-            ESP_LOGD(TAG_SENSOR, "pH: %.2f (%.3fV) | Temp: %.1f C (%.3fV)",
-                     sensor_data.ph.value, sensor_data.ph.voltage,
-                     sensor_data.temperature.value, sensor_data.temperature.voltage);
+        /* 1. CRÍTICO: ESCUCHAR LA RED (Arregla la "sordera") */
+        /* Damos 10ms al procesador para leer comandos de calibración */
+        uros_manager_spin_once(10);
+
+        /* 2. Leer Sensores */
+        const app_state_t *current_state = app_state_get();
+        if (sensors_read_all(&sensor_data) == ESP_OK) {
             
-            /* Agregar muestra al buffer si está habilitado y no hay calibración */
+            /* Lógica Normal: Agregar y Publicar */
             if (current_state->sensor_config.enabled && !app_state_is_calibrating()) {
                 data_aggregator_add_sample(&sensor_data);
-                
-                /* Verificar si es momento de publicar */
+
                 if (data_aggregator_should_publish()) {
-                    sensors_data_t aggregated_data;
-                    
-                    if (data_aggregator_get_result(&aggregated_data) == ESP_OK) {
-                        /* Serializar datos agregados a JSON */
-                        int json_len = sensors_to_json(&aggregated_data, json_buffer,
-                                                       sizeof(json_buffer),
-                                                       current_state->device_info.device_id,
-                                                       DEVICE_LOCATION);
-                        
-                        if (json_len > 0) {
-                            ESP_LOGI(TAG_SENSOR, "📊 Publishing aggregated: pH=%.2f, Temp=%.1f (mode=%d, samples=%u)",
-                                     aggregated_data.ph.value,
-                                     aggregated_data.temperature.value,
-                                     current_state->sensor_config.mode,
-                                     data_aggregator_get_sample_count());
-                            
-                            /* Publicar usando micro-ROS manager */
-                            uros_manager_publish_sensor_data(json_buffer, (size_t)json_len);
+                    sensors_data_t agg_data;
+                    if (data_aggregator_get_result(&agg_data) == ESP_OK) {
+                        int len = sensors_to_json(&agg_data, json_buffer, sizeof(json_buffer),
+                                                  current_state->device_info.device_id, DEVICE_LOCATION);
+                        if (len > 0) {
+                            uros_manager_publish_sensor_data(json_buffer, (size_t)len);
                         }
                     }
                 }
-            } else if (app_state_is_calibrating()) {
-                /* CRÍTICO: Seguir publicando datos LIGEROS durante calibración
-                   para evitar que Agent cierre la sesión por inactividad.
-                   
-                   Problema v4.0.0: Sin publicaciones → Agent timeout ~30s
-                   Solución: Publicar datos raw cada ~10s durante calibración
-                */
-                static uint32_t calib_publish_counter = 0;
-                if (++calib_publish_counter >= 10) {  // ~10 ciclos * 4s = 40s, pero se publica cada lectura
-                    calib_publish_counter = 0;
-                    
-                    int json_len = sensors_to_json(&sensor_data, json_buffer,
-                                                   sizeof(json_buffer),
-                                                   current_state->device_info.device_id,
-                                                   DEVICE_LOCATION);
-                    
-                    if (json_len > 0) {
-                        ESP_LOGD(TAG_SENSOR, "⏸ [KEEP-ALIVE] Publishing raw data during calibration: pH=%.2f, Temp=%.1f",
-                                 sensor_data.ph.value, sensor_data.temperature.value);
-                        
-                        uros_manager_publish_sensor_data(json_buffer, (size_t)json_len);
-                    }
+            }
+            /* Lógica Calibración: Publicar Raw (Keep-Alive) */
+            else if (app_state_is_calibrating()) {
+                /* Publicar cada lectura directamente para mantener vivo el link */
+                int len = sensors_to_json(&sensor_data, json_buffer, sizeof(json_buffer),
+                                          current_state->device_info.device_id, DEVICE_LOCATION);
+                if (len > 0) {
+                    uros_manager_publish_sensor_data(json_buffer, (size_t)len);
                 }
             }
-        } else {
-            ESP_LOGW(TAG_SENSOR, "Sensor read failed (err=%d)", ret);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(current_sample_interval));
+        /* 3. Esperar ciclo */
+        vTaskDelay(pdMS_TO_TICKS(current_state->sensor_config.sample_interval_ms));
     }
 }
