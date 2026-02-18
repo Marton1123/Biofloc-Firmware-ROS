@@ -359,8 +359,8 @@ void uros_manager_reconnect_forever(void)
         
         if (uros_manager_ping_agent()) {
             ESP_LOGI(TAG_UROS, "✓ Agent reconnected!");
-            s_uros.state = UROS_STATE_CONNECTED;
-            app_state_set_uros(UROS_STATE_CONNECTED);
+            // CRÍTICO: Limpiar initialized flag para permitir reinit completo
+            s_uros.initialized = false;
             break;
         }
         
