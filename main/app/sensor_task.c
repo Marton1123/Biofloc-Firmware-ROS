@@ -96,16 +96,26 @@ void sensor_task(void *arg)
         ESP_LOGE(TAG_SENSOR, "Failed to initialize data aggregator");
     }
 
-    /* Esperar a que micro-ROS esté listo */
-    while (!state->uros_ready) {
-        ESP_LOGD(TAG_SENSOR, "Waiting for micro-ROS...");
+    /* Esperar a que micro-ROS esté listo (CON TIMEOUT para evitar deadlock) */
+    uint32_t wait_cycles = 0;
+    const uint32_t MAX_WAIT_CYCLES = 120;  /* 120 * 500ms = 60 segundos timeout */
+    
+    while (!state->uros_ready && wait_cycles < MAX_WAIT_CYCLES) {
+        if (wait_cycles % 20 == 0) {  /* Log cada 10 segundos (20 * 500ms) */
+            ESP_LOGI(TAG_SENSOR, "Waiting for micro-ROS Agent (attempt %lu/120)...", wait_cycles);
+        }
         vTaskDelay(pdMS_TO_TICKS(500));
+        wait_cycles++;
         
         /* Alimentar watchdog incluso mientras espera */
-        if (++watchdog_counter >= 10) {  /* Cada 5 segundos (500ms * 10) */
-            watchdog_counter = 0;
-            esp_task_wdt_reset();
-        }
+        esp_task_wdt_reset();
+    }
+    
+    if (!state->uros_ready) {
+        ESP_LOGW(TAG_SENSOR, "⚠️ Timeout waiting for micro-ROS Agent - continuing anyway");
+        ESP_LOGW(TAG_SENSOR, "   Ensure Agent is running: ros2 run micro_ros_agent micro_ros_agent udp4 --port 8888");
+    } else {
+        ESP_LOGI(TAG_SENSOR, "✓ micro-ROS Agent is ready");
     }
 
     ESP_LOGI(TAG_SENSOR, "Starting sensor readings");
