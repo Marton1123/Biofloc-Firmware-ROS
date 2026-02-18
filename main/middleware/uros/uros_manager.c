@@ -25,6 +25,7 @@
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
+#include <rosidl_runtime_c/string_functions.h>
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
 #include <rmw_microros/rmw_microros.h>
@@ -172,6 +173,14 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
     RCCHECK(rclc_node_init_default(&s_uros.node, "biofloc_node",
                                    ROS_NAMESPACE, &s_uros.support));
     
+    // Initialize message structs BEFORE using them in publishers/subscribers
+    ESP_LOGI(TAG_UROS, "Initializing message structures...");
+    std_msgs__msg__String__init(&s_uros.sensor_data_msg);
+    std_msgs__msg__String__init(&s_uros.calibration_status_msg);
+    std_msgs__msg__String__init(&s_uros.config_status_msg);
+    std_msgs__msg__String__init(&s_uros.calibration_cmd_msg);
+    std_msgs__msg__String__init(&s_uros.config_cmd_msg);
+    
     // Publishers
     ESP_LOGI(TAG_UROS, "Creating publishers...");
     
@@ -269,9 +278,11 @@ esp_err_t uros_manager_publish_sensor_data(const char *json_data, size_t json_le
         return ESP_ERR_INVALID_ARG;
     }
     
-    s_uros.sensor_data_msg.data.data = (char *)json_data;
-    s_uros.sensor_data_msg.data.size = json_len;
-    s_uros.sensor_data_msg.data.capacity = json_len;
+    // Use rosidl_runtime_c__String__assign() to properly copy data
+    if (!rosidl_runtime_c__String__assign(&s_uros.sensor_data_msg.data, json_data)) {
+        ESP_LOGW(TAG_UROS, "Failed to assign sensor_data message");
+        return ESP_FAIL;
+    }
     
     rcl_ret_t ret = rcl_publish(&s_uros.sensor_data_pub,
                                 &s_uros.sensor_data_msg, NULL);
@@ -294,9 +305,11 @@ esp_err_t uros_manager_publish_calibration_status(const char *json_response, siz
         return ESP_ERR_INVALID_ARG;
     }
     
-    s_uros.calibration_status_msg.data.data = (char *)json_response;
-    s_uros.calibration_status_msg.data.size = response_len;
-    s_uros.calibration_status_msg.data.capacity = response_len;
+    // Use rosidl_runtime_c__String__assign() to properly copy data
+    if (!rosidl_runtime_c__String__assign(&s_uros.calibration_status_msg.data, json_response)) {
+        ESP_LOGW(TAG_UROS, "Failed to assign calibration_status message");
+        return ESP_FAIL;
+    }
     
     rcl_ret_t ret = rcl_publish(&s_uros.calibration_status_pub,
                                 &s_uros.calibration_status_msg, NULL);
