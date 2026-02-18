@@ -53,6 +53,8 @@ def send_calibration(device_id, points, sensor_id='ph'):
     ]
     
     print(f"📡 Publicando comando al ESP32...")
+    print(f"   JSON: {cmd_json}")
+    print()
     pub_result = subprocess.run(pub_cmd, capture_output=True, text=True, timeout=15)
     
     if pub_result.returncode != 0:
@@ -75,6 +77,9 @@ def send_calibration(device_id, points, sensor_id='ph'):
     
     if ack_process.returncode != 0 or 'data:' not in (ack_stdout or ''):
         print("❌ No se recibió respuesta válida del ESP32")
+        print(f"   Return code: {ack_process.returncode}")
+        print(f"   STDOUT: {ack_stdout[:200] if ack_stdout else 'None'}")
+        print(f"   STDERR: {ack_stderr[:200] if ack_stderr else 'None'}")
         return False
     
     # Step 4: Parse ACK
