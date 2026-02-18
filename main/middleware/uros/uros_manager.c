@@ -199,20 +199,19 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
         "sensor_data"
     ));
     
-    // DEBUG: Temporarily removed other publishers to isolate issue
-    // RCCHECK(rclc_publisher_init_default(
-    //     &s_uros.calibration_status_pub,
-    //     &s_uros.node,
-    //     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-    //     "calibration_status"
-    // ));
-    // 
-    // RCCHECK(rclc_publisher_init_default(
-    //     &s_uros.config_status_pub,
-    //     &s_uros.node,
-    //     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-    //     "config_status"
-    // ));
+    RCCHECK(rclc_publisher_init_default(
+        &s_uros.calibration_status_pub,
+        &s_uros.node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        "calibration_status"
+    ));
+    
+    RCCHECK(rclc_publisher_init_default(
+        &s_uros.config_status_pub,
+        &s_uros.node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+        "config_status"
+    ));
     
     // Subscribers
     ESP_LOGI(TAG_UROS, "Creating subscribers...");
@@ -435,9 +434,8 @@ void uros_manager_deinit(void)
     ESP_LOGI(TAG_UROS, "Deinitializing uROS manager...");
     
     // Cleanup (orden inverso a inicialización)
-    // DEBUG: Only cleanup sensor_data_pub since others are disabled
-    // rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
-    // rcl_publisher_fini(&s_uros.calibration_status_pub, &s_uros.node);
+    rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
+    rcl_publisher_fini(&s_uros.calibration_status_pub, &s_uros.node);
     rcl_publisher_fini(&s_uros.sensor_data_pub, &s_uros.node);
     rcl_subscription_fini(&s_uros.config_cmd_sub, &s_uros.node);
     rcl_subscription_fini(&s_uros.calibration_cmd_sub, &s_uros.node);
