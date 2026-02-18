@@ -964,7 +964,7 @@ def read_sensor_voltage(sensor_id, device_id=None, timeout=10):
                     print()
                     print_warning(f"⚠ No hay nuevos datos en 8s - ESP32 desconectado?")
                     
-                    if len(voltage_window) >= min_samples:
+                    if len(voltage_window) >= 10:  # At least 10 samples needed
                         median_v = statistics.median(voltage_window)
                         elapsed = time.time() - start_time
                         print_info(f"  Voltaje mediana actual: {median_v:.4f}V")
@@ -982,7 +982,7 @@ def read_sensor_voltage(sensor_id, device_id=None, timeout=10):
                             stop_event.set()
                             return None
                     else:
-                        print_error(f"✗ Timeout sin suficientes muestras ({len(voltage_window)}/{min_samples})")
+                        print_error(f"✗ Timeout sin suficientes muestras ({len(voltage_window)}/10)")
                         stop_event.set()
                         return None
                 
