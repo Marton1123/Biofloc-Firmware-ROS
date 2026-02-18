@@ -510,39 +510,26 @@ def calibrate_remote():
         print_success(f"✓ Punto {i+1} registrado: {voltage:.3f}V → {value} {get_sensor_unit(sensor_id)}")
         print("")
         
-        # v3.6.4: Verificar que ESP32 sigue activo antes del siguiente punto
-        if i < num_points - 1:  # No verificar después del último punto
-            print_info("Verificando salud del ESP32...")
-            time.sleep(2)  # Esperar a que publique un mensaje más
-            
-            # Intentar leer un mensaje para confirmar que está activo
-            test_voltage = read_sensor_voltage(sensor_id, device_id=selected_device, timeout=8)
-            if test_voltage is None:
-                print_error(f"⚠ ALERTA: ESP32 dejó de responder después del punto {i+1}")
-                print_warning("Posibles causas:")
-                print_warning("  - ESP32 sufrió PANIC y se reinició")
-                print_warning("  - Pérdida de conexión WiFi")
-                print_warning("  - micro-ROS Agent desconectado")
-                print_info("")
-                print_info(f"Puntos capturados hasta ahora: {i+1}/{num_points}")
-                
-                retry = input(f"{Colors.WARNING}¿Esperar a que ESP32 se recupere? (s/N): {Colors.ENDC}").strip().lower()
-                if retry == 's':
-                    print_info("Esperando 30 segundos a que ESP32 se reinicie...")
-                    time.sleep(30)
-                    
-                    # Verificar de nuevo
-                    test_voltage = read_sensor_voltage(sensor_id, device_id=selected_device, timeout=10)
-                    if test_voltage is None:
-                        print_error("ESP32 no se recuperó - cancelando calibración")
-                        print_info("Recomendación: Conecta ESP32 por USB y revisa logs con:")
-                        print_info("  idf.py -p /dev/ttyUSB0 monitor")
-                        return
-                    else:
-                        print_success("✓ ESP32 recuperado - continuando calibración")
-                else:
-                    print_error("Calibración cancelada por el usuario")
-                    return
+        # CRÍTICO v4.0.0: NO hacer verificación de salud entre puntos
+        # Razón: read_sensor_voltage() hace estabilización de 3+ minutos
+        #        lo que causa timeout y confusión del usuario
+        # Solución: Confiar en que si se leyó punto, ESP32 está vivo
+        #          Solo verificar rápidamente en tiempo real DESPUÉS de calibración
+        
+        # Mostrar instrucciones claras para siguiente punto (si no es el último)
+        if i < num_points - 1:
+            print(f"{Colors.BOLD}═══ Punto {i+2}/{num_points} ═══{Colors.ENDC}")
+            if sensor_id == 'ph':
+                print_info(f"Sugerencia: Solución buffer pH {suggested_values[i+1]}")
+                print_info("1. Enjuaga el sensor con agua destilada")
+                print_info(f"2. Sumerge el sensor en la solución buffer pH {suggested_values[i+1]}")
+                print_info("3. Espera 30-60 segundos para estabilización")
+            elif sensor_id == 'temperature':
+                print_info(f"Sugerencia: Temperatura de referencia {suggested_values[i+1]}°C")
+                print_info("1. Coloca el sensor en el medio de temperatura conocida")
+                print_info("2. Espera 30-60 segundos para estabilización")
+                print_info("3. Mide con termómetro de referencia (TP101 o similar)")
+            print("")
             else:
                 print_success(f"✓ ESP32 activo (voltaje actual: {test_voltage:.3f}V)")
     
