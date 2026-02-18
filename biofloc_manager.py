@@ -2129,6 +2129,166 @@ def quick_adjust_ph():
         print_info("Los valores ESTÁN guardados en MongoDB (Device Shadow)")
         print_info("Puedes reintentar la sincronización cuando el ESP32 esté estable")
 
+def configure_sensor_intervals():
+    """
+    Configure sensor sampling and publishing intervals dynamically via ROS2.
+    
+    Allows user to select from presets (normal/ahorro/monitoreo/produccion)
+    or enter custom values. Publishes configuration via /biofloc/config_cmd topic.
+    """
+    print_header("⚙️  Configuración Dinámica de Intervalos")
+    
+    print_info("Este sistema permite cambiar los intervalos de muestreo y publicación")
+    print_info("sin recompilar ni reiniciar el ESP32\n")
+    
+    # Display preset modes
+    print(f"{Colors.BOLD}Modos Preconfigurados:{Colors.ENDC}\n")
+    
+    presets = {
+        '1': {
+            'name': 'Normal (Recomendado)',
+            'sample_interval': 4000,
+            'publish_interval': 4000,
+            'mode': 'instant',
+            'samples': 1,
+            'description': 'Equilibrio entre precisión y consumo'
+        },
+        '2': {
+            'name': 'Ahorro de Energía',
+            'sample_interval': 30000,
+            'publish_interval': 30000,
+            'mode': 'instant',
+            'samples': 1,
+            'description': 'Mínimo consumo, lecturas cada 30 segundos'
+        },
+        '3': {
+            'name': 'Monitoreo Intensivo',
+            'sample_interval': 1000,
+            'publish_interval': 10000,
+            'mode': 'median',
+            'samples': 10,
+            'description': 'Toma 10 muestras/segundo, publica mediana cada 10s'
+        },
+        '4': {
+            'name': 'Producción (Alta Precisión)',
+            'sample_interval': 2000,
+            'publish_interval': 60000,
+            'mode': 'average',
+            'samples': 30,
+            'description': 'Promedio de 30 muestras, publicación cada minuto'
+        },
+        '5': {
+            'name': 'Personalizado',
+            'description': 'Configura valores manualmente'
+        }
+    }
+    
+    for key, preset in presets.items():
+        print(f"  [{key}] {preset['name']}")
+        print(f"      {preset['description']}")
+        if 'sample_interval' in preset:
+            print(f"      Muestreo: {preset['sample_interval']}ms | "
+                  f"Publicación: {preset['publish_interval']}ms | "
+                  f"Modo: {preset['mode']}")
+        print()
+    
+    choice = input(f"{Colors.OKBLUE}Selecciona modo [1-5]: {Colors.ENDC}").strip()
+    
+    if choice not in presets:
+        print_error("Opción inválida")
+        return
+    
+    # Get configuration values
+    if choice == '5':  # Custom
+        print_info("\nConfigurando valores personalizados...")
+        print_warning("Rangos válidos: sample_interval [1000-60000ms], publish_interval [1000-3600000ms]")
+        
+        try:
+            sample_interval = int(input("Intervalo de muestreo (ms) [1000-60000]: ").strip())
+            publish_interval = int(input("Intervalo de publicación (ms) [1000-3600000]: ").strip())
+            
+            print("\nModos de agregación:")
+            print("  [1] instant - Publica última muestra (sin agregación)")
+            print("  [2] median - Publica mediana de N muestras")
+            print("  [3] average - Publica promedio de N muestras")
+            mode_choice = input("Modo [1-3]: ").strip()
+            
+            mode_map = {'1': 'instant', '2': 'median', '3': 'average'}
+            mode = mode_map.get(mode_choice, 'instant')
+            
+            if mode != 'instant':
+                max_samples = publish_interval // sample_interval
+                samples = int(input(f"Número de muestras [1-{max_samples}]: ").strip())
+            else:
+                samples = 1
+            
+            config = {
+                'sample_interval': sample_interval,
+                'publish_interval': publish_interval,
+                'mode': mode,
+                'samples': samples
+            }
+            
+        except (ValueError, KeyboardInterrupt):
+            print_error("\nEntrada inválida o cancelada")
+            return
+    else:
+        config = presets[choice]
+    
+    # Confirm configuration
+    print(f"\n{Colors.BOLD}Configuración a aplicar:{Colors.ENDC}")
+    print(f"  • Intervalo de muestreo: {config['sample_interval']} ms")
+    print(f"  • Intervalo de publicación: {config['publish_interval']} ms")
+    print(f"  • Modo de agregación: {config['mode']}")
+    print(f"  • Muestras por publicación: {config['samples']}")
+    print()
+    
+    confirm = input(f"{Colors.WARNING}¿Confirmar y enviar al ESP32? [s/N]: {Colors.ENDC}").strip().lower()
+    
+    if confirm != 's':
+        print_info("Cancelado")
+        return
+    
+    # Build ROS2 command
+    import json as json_lib
+    
+    config_json = json_lib.dumps({
+        'type': 'sensor_config',
+        'sample_interval_ms': config['sample_interval'],
+        'publish_interval_ms': config['publish_interval'],
+        'mode': config['mode'],
+        'samples_per_publish': config['samples'],
+        'enabled': True
+    })
+    
+    # Escape for shell
+    config_escaped = config_json.replace('"', '\\"')
+    
+    cmd = [
+        'bash', '-c',
+        f'source /opt/ros/jazzy/setup.bash && '
+        f'source ~/microros_ws/install/local_setup.bash && '
+        f'ros2 topic pub --once /biofloc/config_cmd '
+        f'std_msgs/msg/String "data: \\\"{config_escaped}\\\""'
+    ]
+    
+    print_info(f"Publicando configuración: {config_json}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            print_success("✓ Configuración enviada al ESP32")
+            print_info("La nueva configuración se aplicará inmediatamente")
+            print_info("Los cambios se guardan en NVS y persisten tras reinicios")
+        else:
+            print_error(f"Error enviando configuración: {result.stderr}")
+            
+    except subprocess.TimeoutExpired:
+        print_error("Timeout enviando comando")
+    except Exception as e:
+        print_error(f"Error: {e}")
+
 def show_menu():
     """Display main menu"""
     print_header("Gestor de Firmware Biofloc")
@@ -2153,6 +2313,7 @@ def show_menu():
     print(f"{Colors.BOLD}Configuración:{Colors.ENDC}")
     print("  [12] Configurar Credenciales WiFi")
     print("  [13] Regenerar sdkconfig desde defaults")
+    print("  [15] ⚙️  Configurar Intervalos de Sensores (Dinámico)")
     print()
     
     print(f"{Colors.BOLD}Firmware:{Colors.ENDC}")
@@ -2187,6 +2348,7 @@ def main():
         '12': configure_wifi,
         '13': regenerate_sdkconfig,
         '14': build_and_flash,
+        '15': configure_sensor_intervals,
     }
     
     while True:

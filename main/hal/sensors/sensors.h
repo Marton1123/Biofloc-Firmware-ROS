@@ -36,30 +36,10 @@ extern "C" {
 #define SENSOR_UNIT_CELSIUS     "C"
 
 /* ============================================================================
- * Data Structures
+ * Data Structures - Moved to core/types.h to avoid duplication
  * ============================================================================ */
 
-/**
- * @brief Single sensor reading
- */
-typedef struct {
-    float value;            /**< Physical value (pH or °C) */
-    float voltage;          /**< Sensor voltage (before divider, 0-5V) */
-    float voltage_adc;      /**< ADC input voltage (after divider) */
-    int raw_adc;            /**< Raw ADC value (0-4095) */
-    bool valid;             /**< true if reading is within valid range */
-    const char *unit;       /**< Unit string ("pH" or "C") */
-} sensor_reading_t;
-
-/**
- * @brief Complete sensor data set
- */
-typedef struct {
-    sensor_reading_t ph;
-    sensor_reading_t temperature;
-    int64_t timestamp_ms;                       /**< Unix timestamp in ms */
-    char timestamp_iso[SENSOR_TIMESTAMP_SIZE];  /**< ISO 8601 formatted timestamp */
-} sensors_data_t;
+#include "core/types.h"  // sensor_reading_t, sensors_data_t, sensor_type_t, etc.
 
 /* ============================================================================
  * Initialization and Cleanup
@@ -108,30 +88,12 @@ esp_err_t sensors_read_ph(sensor_reading_t *reading);
 esp_err_t sensors_read_temperature(sensor_reading_t *reading);
 
 /* ============================================================================
- * Calibration Functions
+ * Calibration Functions - Types moved to core/types.h
  * ============================================================================ */
 
+// Use sensor_type_t, calibration_point_t, calibration_status_t from core/types.h
+
 #define MAX_CALIBRATION_POINTS  5   /**< Maximum calibration points per sensor */
-
-/**
- * @brief Sensor types for calibration
- */
-typedef enum {
-    SENSOR_TYPE_PH = 0,
-    SENSOR_TYPE_TEMPERATURE,
-    SENSOR_TYPE_DISSOLVED_OXYGEN,
-    SENSOR_TYPE_CONDUCTIVITY,
-    SENSOR_TYPE_TURBIDITY,
-    SENSOR_TYPE_MAX
-} sensor_type_t;
-
-/**
- * @brief Generic calibration point (voltage/value pair)
- */
-typedef struct {
-    float voltage;      /**< Sensor voltage reading (V) */
-    float value;        /**< Known physical value (pH, °C, etc.) */
-} calibration_point_t;
 
 /**
  * @brief Generic sensor calibration data
@@ -146,18 +108,6 @@ typedef struct {
     float r_squared;                                /**< Goodness of fit (0-1) */
     char timestamp[32];                             /**< Calibration timestamp ISO8601 */
 } sensor_calibration_t;
-
-/**
- * @brief Calibration status codes
- */
-typedef enum {
-    CAL_STATUS_SUCCESS = 0,
-    CAL_STATUS_INVALID_SENSOR,
-    CAL_STATUS_INVALID_POINTS,
-    CAL_STATUS_INSUFFICIENT_POINTS,
-    CAL_STATUS_NVS_ERROR,
-    CAL_STATUS_NOT_INITIALIZED
-} calibration_status_t;
 
 /**
  * @brief Calibration response structure

@@ -1,41 +1,64 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 3.6.0
+ * @version 4.0.0
  *
  * @description
  *   Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  *   Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  *   Soporta calibración remota vía topic /biofloc/calibration_cmd.
- *   Arquitectura Device Shadow: MongoDB → ESP32 sync.
  *
- * @changelog v3.6.0 (2026-02-17)
- *   - ✅ CRITICAL BUG FIX: Corregido PANIC cíclico de 4 minutos
- *   - ✅ reconnect_forever() ahora alimenta watchdog durante delays
- *   - ✅ Intervalo de ping reducido 30s→15s (bajo watchdog de 20s)
- *   - ✅ Solución: Delays fragmentados con esp_task_wdt_reset() cada 1s
- *   - ✅ Heap estable, crash eliminado completamente
+ * @changelog v4.0.0 (2026-02-18) - REFACTORIZACIÓN COMPLETA
+ *   - 🏗️ Arquitectura modular con separación de responsabilidades
+ *   - ✅ Core: config.h, types.h, app_state.c/.h
+ *   - ✅ Clean Code + SOLID + Security best practices
+ *   - ✅ Estado global thread-safe con mutex
+ *   - ✅ Zero magic numbers, todo en config.h
  * 
- * @changelog v3.5.0 (2026-02-17)
- *   - ✅ LOGGING EXHAUSTIVO: Para diagnóstico de PANIC crashes
- *   - ✅ Arquitectura Device Shadow: ESP32 sincroniza desde MongoDB
+ * @changelog v3.6.5 (2026-02-18)
+ *   - ✅ Pausa de sensor_data durante calibración para evitar crash
+ *   - ✅ g_calibrating flag para controlar publicación
+ * 
+ * @changelog v3.6.4 (2026-02-17)
+ *   - ✅ Stack de sensor_task aumentado a 12KB
+ *   - ✅ Buffer cleanup entre calibraciones
+ *   - ✅ Monitoreo de ambos stacks
  */
 
+/* Standard library */
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
-#include "cJSON.h"
 
+/* Core modules */
+#include "config.h"
+#include "types.h"
+#include "app_state.h"
+
+/* Middleware modules */
+#include "middleware/uros/uros_manager.h"
+#include "middleware/data_aggregator.h"
+#include "middleware/config_manager.h"
+#include "middleware/calibration/calibration_handler.h"
+
+/* Application layer */
+#include "app/sensor_task.h"
+
+/* HAL - Hardware Abstraction Layer */
+#include "hal/sensors/sensors.h"
+
+/* ESP-IDF */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
-#include "esp_task_wdt.h"  /* Hardware Task Watchdog Timer */
-#include "esp_timer.h"      /* System uptime */
-#include "esp_heap_caps.h"  /* Free heap tracking */
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
 
+/* micro-ROS */
 #include <uros_network_interfaces.h>
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -49,22 +72,9 @@
 #include <rmw_microros/rmw_microros.h>
 #endif
 
-#include "sensors.h"
-
 /* ============================================================================
- * Configuration Constants
+ * NOTA: Las constantes ahora están en core/config.h
  * ============================================================================ */
-
-#define FIRMWARE_VERSION        "3.6.4"
-
-/* Watchdog Timer Configuration (CRITICAL for zombie state prevention) */
-#define WATCHDOG_TIMEOUT_SEC    20      /* Reset ESP32 if task doesn't feed watchdog for 20s */
-#define WATCHDOG_FEED_INTERVAL  5000    /* Feed watchdog every 5 seconds */
-
-#define AGENT_IP                CONFIG_BIOFLOC_AGENT_IP
-#define AGENT_PORT              CONFIG_BIOFLOC_AGENT_PORT
-#define ROS_NAMESPACE           CONFIG_BIOFLOC_ROS_NAMESPACE
-#define PING_TIMEOUT_MS         10000  /* Aumentado de 5s a 10s para redes lentas */
 #define PING_RETRIES            5      /* Aumentado de 3 a 5 reintentos */
 #define SAMPLE_INTERVAL_MS      CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
@@ -88,12 +98,9 @@
 #define RECONNECT_FOREVER       true   /* CRÍTICO: Nunca reiniciar, reconectar infinitamente */
 
 /* ============================================================================
- * Logging Tags
+ * Logging Tags - Ahora en core/config.h
  * ============================================================================ */
-
-static const char *TAG_MAIN   = "BIOFLOC";
-static const char *TAG_UROS   = "UROS";
-static const char *TAG_SENSOR = "SENSOR";
+// TAG_MAIN, TAG_UROS, TAG_SENSOR definidos en config.h
 
 /* ============================================================================
  * Error Handling Macros
@@ -132,17 +139,16 @@ typedef struct {
     bool initialized;
 } microros_context_t;
 
+// TODO FASE 2: Refactorizar para usar app_state_*() API completamente
 typedef struct {
     char device_id[24];
     char mac_address[18];
     char ip_address[16];
     bool microros_ready;
-} app_state_t;
+} local_app_state_t;
 
-static microros_context_t g_uros_ctx = {0};
-static app_state_t g_app_state = {0};
-static char g_agent_port_str[8];
-static TaskHandle_t g_sensor_task_handle = NULL;
+// v4.0.0: g_uros_ctx eliminated - now managed by uros_manager module
+static local_app_state_t g_app_state = {0};  // TEMPORAL - migrar a app_state API
 
 /* ============================================================================
  * Network Utilities
@@ -170,558 +176,6 @@ static void get_network_info(void)
 }
 
 /* ============================================================================
- * micro-ROS Agent Connection
- * ============================================================================ */
-
-static bool ping_agent(rmw_init_options_t *rmw_options, int timeout_ms, int retries)
-{
-    for (int attempt = 1; attempt <= retries; attempt++) {
-        ESP_LOGI(TAG_UROS, "Ping attempt %d/%d", attempt, retries);
-
-        if (rmw_uros_ping_agent_options(timeout_ms, 1, rmw_options) == RMW_RET_OK) {
-            ESP_LOGI(TAG_UROS, "Agent is ONLINE");
-            return true;
-        }
-
-        if (attempt < retries) {
-            ESP_LOGW(TAG_UROS, "Ping failed, retrying in 2s...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
-
-    return false;
-}
-
-/**
- * @brief Infinite reconnection loop without restart (ANTI-BOOTLOOP)
- * 
- * CRITICAL FIX v3.6.0: Feed watchdog during reconnection to prevent PANIC.
- * This was the cause of the 4-minute cyclic crash.
- * 
- * This function will retry forever until the agent comes back online.
- * Uses exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s, 60s...
- * ESP32 will NEVER restart - it will wait indefinitely for the agent.
- */
-static void reconnect_forever(void)
-{
-    uint32_t delay_ms = RECONNECT_DELAY_INITIAL;
-    uint32_t attempt = 0;
-    
-    ESP_LOGW(TAG_UROS, "⚠️ Lost connection - entering infinite reconnection mode");
-    ESP_LOGW(TAG_UROS, "ESP32 will NOT restart - waiting for Agent to come back...");
-    
-    while (1) {
-        attempt++;
-        ESP_LOGI(TAG_UROS, "Reconnection attempt #%lu (delay: %lums)", attempt, delay_ms);
-        
-        /* CRITICAL: Feed watchdog during delay to prevent PANIC */
-        uint32_t remaining_ms = delay_ms;
-        while (remaining_ms > 0) {
-            uint32_t chunk = (remaining_ms > 1000) ? 1000 : remaining_ms;
-            vTaskDelay(pdMS_TO_TICKS(chunk));
-            esp_task_wdt_reset();  /* Feed every second */
-            remaining_ms -= chunk;
-        }
-
-        if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) == RMW_RET_OK) {
-            ESP_LOGI(TAG_UROS, "✅ Reconnected successfully after %lu attempts!", attempt);
-            return;  /* Exit infinite loop and resume normal operation */
-        }
-        
-        /* Exponential backoff with cap at 60s */
-        delay_ms = (delay_ms * 2 > RECONNECT_DELAY_MAX) 
-                   ? RECONNECT_DELAY_MAX 
-                   : delay_ms * 2;
-    }
-}
-
-/* ============================================================================
- * Sensor Task
- * ============================================================================ */
-
-static void sensor_task(void *arg)
-{
-    (void)arg;
-
-    ESP_LOGI(TAG_SENSOR, "Sensor task started");
-    ESP_LOGI(TAG_SENSOR, "Sample interval: %d ms", SAMPLE_INTERVAL_MS);
-    ESP_LOGI(TAG_SENSOR, "Location: %s", DEVICE_LOCATION);
-    
-    /* Subscribe to Task Watchdog Timer (CRITICAL for zombie state detection) */
-    ESP_LOGI(TAG_SENSOR, "Subscribing to watchdog (timeout: %ds)", WATCHDOG_TIMEOUT_SEC);
-    esp_err_t wdt_err = esp_task_wdt_add(NULL);
-    if (wdt_err == ESP_OK) {
-        ESP_LOGI(TAG_SENSOR, "✓ Watchdog subscribed - will reset if blocked > %ds", WATCHDOG_TIMEOUT_SEC);
-    } else {
-        ESP_LOGW(TAG_SENSOR, "Failed to subscribe to watchdog (err=%d)", wdt_err);
-    }
-
-    esp_err_t ret = sensors_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG_SENSOR, "Failed to initialize sensors (err=%d)", ret);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    /* Apply pH calibration (3-point calibration with pH 4.01, 6.86, 9.18) */
-    ret = sensors_calibrate_ph_manual(2.559823f, 0.469193f);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG_SENSOR, "✓ pH calibration applied: R²=0.9997, max_err=0.049pH");
-    } else {
-        ESP_LOGW(TAG_SENSOR, "Failed to apply pH calibration");
-    }
-
-    sensors_get_device_info(g_app_state.device_id, 
-                            g_app_state.mac_address, 
-                            g_app_state.ip_address);
-
-    char json_buffer[JSON_BUFFER_SIZE];
-    sensors_data_t sensor_data;
-    uint32_t watchdog_counter = 0;
-
-    while (!g_app_state.microros_ready) {
-        ESP_LOGD(TAG_SENSOR, "Waiting for micro-ROS...");
-        vTaskDelay(pdMS_TO_TICKS(500));
-        
-        /* Feed watchdog even while waiting */
-        if (++watchdog_counter >= 10) {  /* Every 5 seconds (500ms * 10) */
-            watchdog_counter = 0;
-            esp_task_wdt_reset();
-        }
-    }
-
-    ESP_LOGI(TAG_SENSOR, "Starting sensor readings");
-
-    while (1) {
-        /* Feed watchdog at the start of each iteration (CRITICAL) */
-        esp_task_wdt_reset();
-        
-        ret = sensors_read_all(&sensor_data);
-
-        if (ret == ESP_OK) {
-            int json_len = sensors_to_json(&sensor_data, json_buffer,
-                                           sizeof(json_buffer),
-                                           g_app_state.device_id,
-                                           DEVICE_LOCATION);
-
-            if (json_len > 0 && g_uros_ctx.initialized) {
-                ESP_LOGI(TAG_SENSOR, "pH: %.2f (%.3fV) | Temp: %.1f C (%.3fV)",
-                         sensor_data.ph.value, sensor_data.ph.voltage,
-                         sensor_data.temperature.value, sensor_data.temperature.voltage);
-
-                g_uros_ctx.sensor_msg.data.data = json_buffer;
-                g_uros_ctx.sensor_msg.data.size = (size_t)json_len;
-                g_uros_ctx.sensor_msg.data.capacity = JSON_BUFFER_SIZE;
-
-                rcl_ret_t pub_ret = rcl_publish(&g_uros_ctx.sensor_publisher,
-                                                &g_uros_ctx.sensor_msg, NULL);
-                if (pub_ret != RCL_RET_OK) {
-                    ESP_LOGW(TAG_SENSOR, "Failed to publish (rc=%d)", (int)pub_ret);
-                }
-            }
-        } else {
-            ESP_LOGW(TAG_SENSOR, "Sensor read failed (err=%d)", ret);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(SAMPLE_INTERVAL_MS));
-    }
-}
-
-/* ============================================================================
- * Calibration Command Handler — SRP Architecture (v3.4.0)
- *
- * Flow: calibration_callback()
- *   └─ safe_receive_msg()          → Copy & null-terminate
- *   └─ parse_calibration_json_safe() → Validate JSON structure
- *   └─ execute_calibration_action()  → Dispatch reset/get/calibrate
- *   └─ send_calibration_ack()       → Publish ACK with device_id
- *
- * INVARIANT: This code NEVER crashes. Every path returns gracefully.
- * ============================================================================ */
-
-/**
- * @brief Safely copy micro-ROS string to null-terminated local buffer
- *
- * micro-ROS XRCE-DDS deserialization fills msg->data.data with EXACTLY
- * msg->data.size bytes but does NOT guarantee a '\0' terminator.
- * cJSON_Parse() reads until '\0' → segfault without this copy.
- *
- * @param msg      Incoming micro-ROS string message
- * @param buffer   Destination buffer (must be >= buffer_size bytes)
- * @param buf_size Size of destination buffer
- * @return Number of bytes copied (>0), or -1 on error
- */
-static int safe_receive_msg(const std_msgs__msg__String *msg,
-                            char *buffer, size_t buf_size)
-{
-    if (!msg || !msg->data.data || msg->data.size == 0) {
-        ESP_LOGE(TAG_UROS, "SAFETY: NULL or empty calibration message");
-        return -1;
-    }
-
-    size_t copy_len = msg->data.size;
-    if (copy_len >= buf_size) {
-        copy_len = buf_size - 1;
-        ESP_LOGW(TAG_UROS, "Message truncated: %d → %d bytes",
-                 (int)msg->data.size, (int)copy_len);
-    }
-
-    memcpy(buffer, msg->data.data, copy_len);
-    buffer[copy_len] = '\0';
-    return (int)copy_len;
-}
-
-/**
- * @brief Parse and validate calibration JSON structure
- *
- * Validates: root is object, "sensor" is string and known,
- * "action" is string and known. On any failure, fills response
- * buffer and returns NULL.
- *
- * @param json_str  Null-terminated JSON string
- * @param resp      Response buffer (filled on error)
- * @param resp_size Size of response buffer
- * @param out_type  Output: parsed sensor type enum
- * @param out_action Output: pointer to action string (inside cJSON tree)
- * @return cJSON root on success (caller MUST cJSON_Delete), NULL on error
- */
-static cJSON *parse_calibration_json_safe(const char *json_str,
-                                          char *resp, size_t resp_size,
-                                          sensor_type_t *out_type,
-                                          const char **out_action)
-{
-    cJSON *root = cJSON_Parse(json_str);
-    if (!root) {
-        const char *err_ptr = cJSON_GetErrorPtr();
-        ESP_LOGE(TAG_UROS, "JSON parse failed near: %.40s", err_ptr ? err_ptr : "(null)");
-        snprintf(resp, resp_size,
-                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Invalid JSON\"}",
-                 g_app_state.device_id);
-        return NULL;
-    }
-
-    /* Validate "sensor" field */
-    cJSON *sensor_json = cJSON_GetObjectItem(root, "sensor");
-    if (!cJSON_IsString(sensor_json) || !sensor_json->valuestring) {
-        ESP_LOGE(TAG_UROS, "Missing or invalid 'sensor' field");
-        snprintf(resp, resp_size,
-                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Missing 'sensor' field\"}",
-                 g_app_state.device_id);
-        cJSON_Delete(root);
-        return NULL;
-    }
-
-    const char *sensor_str = sensor_json->valuestring;
-    *out_type = SENSOR_TYPE_MAX;  /* sentinel = unknown */
-
-    if (strcmp(sensor_str, "ph") == 0)                  *out_type = SENSOR_TYPE_PH;
-    else if (strcmp(sensor_str, "temperature") == 0)     *out_type = SENSOR_TYPE_TEMPERATURE;
-    else if (strcmp(sensor_str, "dissolved_oxygen") == 0) *out_type = SENSOR_TYPE_DISSOLVED_OXYGEN;
-    else if (strcmp(sensor_str, "conductivity") == 0)    *out_type = SENSOR_TYPE_CONDUCTIVITY;
-    else if (strcmp(sensor_str, "turbidity") == 0)       *out_type = SENSOR_TYPE_TURBIDITY;
-
-    if (*out_type == SENSOR_TYPE_MAX) {
-        ESP_LOGE(TAG_UROS, "Unknown sensor type: %s", sensor_str);
-        snprintf(resp, resp_size,
-                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Unknown sensor: %s\"}",
-                 g_app_state.device_id, sensor_str);
-        cJSON_Delete(root);
-        return NULL;
-    }
-
-    /* Validate "action" field */
-    cJSON *action_json = cJSON_GetObjectItem(root, "action");
-    if (!cJSON_IsString(action_json) || !action_json->valuestring) {
-        ESP_LOGE(TAG_UROS, "Missing or invalid 'action' field");
-        snprintf(resp, resp_size,
-                 "{\"device_id\":\"%s\",\"status\":\"error\",\"message\":\"Missing 'action' field\"}",
-                 g_app_state.device_id);
-        cJSON_Delete(root);
-        return NULL;
-    }
-
-    *out_action = action_json->valuestring;
-    return root;  /* Caller MUST call cJSON_Delete(root) when done */
-}
-
-/**
- * @brief Execute a calibration action (reset, get, or calibrate)
- *
- * This function encapsulates all NVS-touching logic. On return,
- * `resp` is always populated with a valid JSON response.
- *
- * @param root       Parsed cJSON root (for extracting "points")
- * @param sensor_type Validated sensor type
- * @param sensor_str  Sensor name string (for response messages)
- * @param action      Action string ("reset", "get", or "calibrate")
- * @param resp        Response buffer
- * @param resp_size   Size of response buffer
- */
-static void execute_calibration_action(cJSON *root,
-                                       sensor_type_t sensor_type,
-                                       const char *sensor_str,
-                                       const char *action,
-                                       char *resp, size_t resp_size)
-{
-    /* ---- ACTION: reset ---- */
-    if (strcmp(action, "reset") == 0) {
-        esp_err_t err = sensors_reset_calibration(sensor_type);
-        snprintf(resp, resp_size,
-                 "{\"device_id\":\"%s\",\"status\":\"%s\",\"sensor\":\"%s\","
-                 "\"message\":\"%s\"}",
-                 g_app_state.device_id,
-                 (err == ESP_OK) ? "success" : "error",
-                 sensor_str,
-                 (err == ESP_OK) ? "Calibration reset to factory defaults"
-                                 : "Reset failed");
-        return;
-    }
-
-    /* ---- ACTION: get ---- */
-    if (strcmp(action, "get") == 0) {
-        sensor_calibration_t cal;
-        esp_err_t err = sensors_get_calibration(sensor_type, &cal);
-        if (err == ESP_OK) {
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"success\",\"sensor\":\"%s\","
-                     "\"enabled\":%s,\"slope\":%.6f,\"offset\":%.6f,"
-                     "\"r_squared\":%.4f,\"points\":%d}",
-                     g_app_state.device_id, sensor_str,
-                     cal.enabled ? "true" : "false",
-                     cal.slope, cal.offset, cal.r_squared, cal.num_points);
-        } else {
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"error\",\"sensor\":\"%s\","
-                     "\"message\":\"Failed to get calibration\"}",
-                     g_app_state.device_id, sensor_str);
-        }
-        return;
-    }
-
-    /* ---- ACTION: calibrate ---- */
-    if (strcmp(action, "calibrate") == 0) {
-        ESP_LOGI(TAG_UROS, "  → Calibrate action");
-        
-        /* Validate "points" array */
-        cJSON *points_json = cJSON_GetObjectItem(root, "points");
-        if (!cJSON_IsArray(points_json)) {
-            ESP_LOGE(TAG_UROS, "Missing or invalid 'points' array");
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"error\","
-                     "\"message\":\"Missing 'points' array\"}",
-                     g_app_state.device_id);
-            return;
-        }
-
-        int num_points = cJSON_GetArraySize(points_json);
-        ESP_LOGI(TAG_UROS, "  Points in JSON: %d", num_points);
-        
-        if (num_points < 2 || num_points > MAX_CALIBRATION_POINTS) {
-            ESP_LOGE(TAG_UROS, "Invalid point count: %d (need 2-%d)", num_points, MAX_CALIBRATION_POINTS);
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"error\","
-                     "\"message\":\"Need 2-%d calibration points, got %d\"}",
-                     g_app_state.device_id, MAX_CALIBRATION_POINTS, num_points);
-            return;
-        }
-
-        /* Parse each calibration point with exhaustive validation */
-        calibration_point_t points[MAX_CALIBRATION_POINTS];
-        ESP_LOGI(TAG_UROS, "  Parsing calibration points...");
-
-        for (int i = 0; i < num_points; i++) {
-            cJSON *pt = cJSON_GetArrayItem(points_json, i);
-            if (!pt || !cJSON_IsObject(pt)) {
-                ESP_LOGE(TAG_UROS, "Point %d: not an object", i);
-                snprintf(resp, resp_size,
-                         "{\"device_id\":\"%s\",\"status\":\"error\","
-                         "\"message\":\"Point %d is not an object\"}",
-                         g_app_state.device_id, i);
-                return;
-            }
-
-            cJSON *v = cJSON_GetObjectItem(pt, "voltage");
-            cJSON *val = cJSON_GetObjectItem(pt, "value");
-
-            if (!v || !cJSON_IsNumber(v) || !val || !cJSON_IsNumber(val)) {
-                ESP_LOGE(TAG_UROS, "Point %d: missing or non-numeric voltage/value", i);
-                snprintf(resp, resp_size,
-                         "{\"device_id\":\"%s\",\"status\":\"error\","
-                         "\"message\":\"Point %d: invalid voltage/value\"}",
-                         g_app_state.device_id, i);
-                return;
-            }
-
-            points[i].voltage = (float)v->valuedouble;
-            points[i].value   = (float)val->valuedouble;
-            ESP_LOGI(TAG_UROS, "  Point %d: %.3fV → %.2f %s",
-                     i + 1, points[i].voltage, points[i].value, sensor_str);
-        }
-
-        ESP_LOGI(TAG_UROS, "  ✓ All points parsed successfully");
-        ESP_LOGI(TAG_UROS, "  Calling sensors_calibrate_generic()...");
-        
-        /* Execute calibration + NVS save */
-        calibration_response_t cal_resp;
-        memset(&cal_resp, 0, sizeof(cal_resp));
-
-        ESP_LOGI(TAG_UROS, "  Free heap before calibration: %lu", (unsigned long)esp_get_free_heap_size());
-        
-        esp_err_t err = sensors_calibrate_generic(sensor_type, points,
-                                                   (uint8_t)num_points, &cal_resp);
-
-        ESP_LOGI(TAG_UROS, "  sensors_calibrate_generic() returned: err=%d, status=%d",
-                 err, cal_resp.status);
-        ESP_LOGI(TAG_UROS, "  Free heap after calibration: %lu", (unsigned long)esp_get_free_heap_size());
-
-        if (err == ESP_OK && cal_resp.status == CAL_STATUS_SUCCESS) {
-            ESP_LOGI(TAG_UROS, "✓ Calibration SUCCESS: R²=%.4f slope=%.6f offset=%.6f",
-                     cal_resp.r_squared, cal_resp.slope, cal_resp.offset);
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"success\",\"sensor\":\"%s\","
-                     "\"slope\":%.6f,\"offset\":%.6f,\"r_squared\":%.4f,"
-                     "\"message\":\"%s\"}",
-                     g_app_state.device_id, sensor_str,
-                     cal_resp.slope, cal_resp.offset, cal_resp.r_squared,
-                     cal_resp.message);
-        } else {
-            ESP_LOGE(TAG_UROS, "✗ Calibration FAILED: %s (err=%d)", cal_resp.message, err);
-            snprintf(resp, resp_size,
-                     "{\"device_id\":\"%s\",\"status\":\"error\",\"sensor\":\"%s\","
-                     "\"message\":\"%s\"}",
-                     g_app_state.device_id, sensor_str, cal_resp.message);
-        }
-        return;
-    }
-
-    /* ---- Unknown action ---- */
-    ESP_LOGE(TAG_UROS, "Unknown action: %s", action);
-    snprintf(resp, resp_size,
-             "{\"device_id\":\"%s\",\"status\":\"error\","
-             "\"message\":\"Unknown action: %s\"}",
-             g_app_state.device_id, action);
-}
-
-/**
- * @brief Publish calibration ACK response to /biofloc/calibration_status
- *
- * Always publishes, even on error — the Python side needs to know what happened.
- * Uses static response_msg buffer to avoid stack pressure.
- *
- * @param response  Null-terminated JSON response string
- */
-static void send_calibration_ack(const char *response)
-{
-    if (!g_uros_ctx.initialized) {
-        ESP_LOGW(TAG_UROS, "Cannot send ACK: micro-ROS not initialized");
-        return;
-    }
-
-    g_uros_ctx.calibration_response_msg.data.data     = (char *)response;
-    g_uros_ctx.calibration_response_msg.data.size     = strlen(response);
-    g_uros_ctx.calibration_response_msg.data.capacity = CAL_RESPONSE_SIZE;
-
-    rcl_ret_t ret = rcl_publish(&g_uros_ctx.calibration_response_publisher,
-                                &g_uros_ctx.calibration_response_msg, NULL);
-    if (ret == RCL_RET_OK) {
-        ESP_LOGI(TAG_UROS, "✓ ACK sent (%d bytes)", (int)strlen(response));
-    } else {
-        ESP_LOGW(TAG_UROS, "✗ ACK publish failed (rc=%d)", (int)ret);
-    }
-}
-
-/**
- * @brief Main calibration callback — orchestrates SRP functions
- *
- * Called by the rclc executor when a message arrives on calibration_cmd.
- * This function NEVER crashes: every failure path logs + sends ACK + returns.
- * 
- * v3.5.0: EXHAUSTIVE LOGGING for crash diagnosis
- */
-static void calibration_callback(const void *msgin)
-{
-    /* CRITICAL: Feed watchdog at start to prevent timeout during calibration */
-    esp_task_wdt_reset();
-    
-    /* Static buffers — off the stack to reduce pressure on the 20KB task stack */
-    static char safe_buffer[CAL_CMD_BUFFER_SIZE];
-    static char response[CAL_RESPONSE_SIZE];
-    
-    /* v3.6.4: Zero buffers to prevent data corruption from previous calibrations */
-    memset(safe_buffer, 0, sizeof(safe_buffer));
-    memset(response, 0, sizeof(response));
-
-    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-    ESP_LOGI(TAG_UROS, "  CALIBRATION CALLBACK INVOKED (v3.6.4)");
-    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-    ESP_LOGI(TAG_UROS, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
-    ESP_LOGI(TAG_UROS, "Free stack (micro_ros_task): %u bytes", uxTaskGetStackHighWaterMark(NULL));
-    
-    /* v3.6.4: Also check sensor_task stack (potential overflow risk) */
-    if (g_sensor_task_handle) {
-        ESP_LOGI(TAG_UROS, "Free stack (sensor_task): %u bytes", uxTaskGetStackHighWaterMark(g_sensor_task_handle));
-    }
-
-    /* Step 1: Safe receive with null-termination */
-    ESP_LOGI(TAG_UROS, "[1/4] Receiving message...");
-    int len = safe_receive_msg((const std_msgs__msg__String *)msgin,
-                               safe_buffer, sizeof(safe_buffer));
-    if (len < 0) {
-        ESP_LOGE(TAG_UROS, "✗ safe_receive_msg FAILED");
-        snprintf(response, sizeof(response),
-                 "{\"device_id\":\"%s\",\"status\":\"error\","
-                 "\"message\":\"NULL or empty message\"}",
-                 g_app_state.device_id);
-        send_calibration_ack(response);
-        ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-        return;
-    }
-
-    ESP_LOGI(TAG_UROS, "✓ Message received (%d bytes)", len);
-    ESP_LOGI(TAG_UROS, "Payload (first 200 chars): %.200s%s",
-             safe_buffer, len > 200 ? "..." : "");
-
-    /* Step 2: Parse + validate JSON */
-    ESP_LOGI(TAG_UROS, "[2/4] Parsing JSON...");
-    sensor_type_t sensor_type;
-    const char *action = NULL;
-
-    cJSON *root = parse_calibration_json_safe(safe_buffer, response,
-                                              sizeof(response),
-                                              &sensor_type, &action);
-    if (!root) {
-        ESP_LOGE(TAG_UROS, "✗ parse_calibration_json_safe FAILED");
-        /* response already filled by parse function */
-        send_calibration_ack(response);
-        ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-        return;
-    }
-
-    /* Extract sensor string for logging/response (safe: validated above) */
-    const char *sensor_str = cJSON_GetObjectItem(root, "sensor")->valuestring;
-
-    ESP_LOGI(TAG_UROS, "✓ JSON parsed successfully");
-    ESP_LOGI(TAG_UROS, "  Action: %s | Sensor: %s | Type: %d", action, sensor_str, sensor_type);
-
-    /* Step 3: Execute action */
-    ESP_LOGI(TAG_UROS, "[3/4] Executing calibration action...");
-    execute_calibration_action(root, sensor_type, sensor_str, action,
-                               response, sizeof(response));
-    ESP_LOGI(TAG_UROS, "✓ Action executed");
-    
-    /* CRITICAL: Feed watchdog after calibration execution */
-    esp_task_wdt_reset();
-
-    /* Step 4: Cleanup + send ACK (ALWAYS, even on error) */
-    ESP_LOGI(TAG_UROS, "[4/4] Sending ACK...");
-    cJSON_Delete(root);
-    send_calibration_ack(response);
-
-    ESP_LOGI(TAG_UROS, "✓ Calibration command processed successfully");
-    ESP_LOGI(TAG_UROS, "════════════════════════════════════════");
-}
-
-/* ============================================================================
  * micro-ROS Task
  * ============================================================================ */
 
@@ -729,108 +183,27 @@ static void micro_ros_task(void *arg)
 {
     (void)arg;
 
-    snprintf(g_agent_port_str, sizeof(g_agent_port_str), "%d", AGENT_PORT);
-
     ESP_LOGI(TAG_UROS, "micro-ROS task started");
-    ESP_LOGI(TAG_UROS, "Agent: %s:%s", AGENT_IP, g_agent_port_str);
+    ESP_LOGI(TAG_UROS, "Agent: %s:%d", AGENT_IP, AGENT_PORT);
 
-    g_uros_ctx.allocator = rcl_get_default_allocator();
+    // v4.0.0: Initialize micro-ROS via uros_manager (callback antes de executor)
+    esp_err_t ret = uros_manager_init(calibration_callback);
 
-    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
-    RCCHECK(rcl_init_options_init(&init_options, g_uros_ctx.allocator));
-
-#ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
-    rmw_init_options_t *rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
-    RCCHECK(rmw_uros_options_set_udp_address(AGENT_IP, g_agent_port_str, rmw_options));
-
-    ESP_LOGI(TAG_UROS, "Pinging Agent (timeout: %dms, retries: %d)",
-             PING_TIMEOUT_MS, PING_RETRIES);
-
-    if (!ping_agent(rmw_options, PING_TIMEOUT_MS, PING_RETRIES)) {
+    if (ret != ESP_OK) {
         ESP_LOGW(TAG_UROS, "⚠️ Agent unreachable on startup - waiting...");
         ESP_LOGW(TAG_UROS, "ESP32 will NOT restart - reconnecting infinitely");
         
-        /* Wait forever for agent instead of restarting */
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            if (ping_agent(rmw_options, PING_TIMEOUT_MS, 1)) {
-                ESP_LOGI(TAG_UROS, "✅ Agent is now online!");
-                break;
-            }
-            ESP_LOGI(TAG_UROS, "Still waiting for Agent...");
+        // Wait forever for agent
+        uros_manager_reconnect_forever();
+        
+        // Retry initialization
+        ret = uros_manager_init(calibration_callback);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG_UROS, "FATAL: Failed to initialize after reconnection");
+            vTaskDelete(NULL);
+            return;
         }
     }
-#endif
-
-    ESP_LOGI(TAG_UROS, "Initializing micro-ROS support");
-    RCCHECK(rclc_support_init_with_options(&g_uros_ctx.support, 0, NULL,
-                                           &init_options, &g_uros_ctx.allocator));
-
-    ESP_LOGI(TAG_UROS, "Creating node: /%s/biofloc_node", ROS_NAMESPACE);
-    RCCHECK(rclc_node_init_default(&g_uros_ctx.node, "biofloc_node",
-                                   ROS_NAMESPACE, &g_uros_ctx.support));
-
-    ESP_LOGI(TAG_UROS, "Creating publisher: /%s/sensor_data", ROS_NAMESPACE);
-    RCCHECK(rclc_publisher_init_default(
-        &g_uros_ctx.sensor_publisher,
-        &g_uros_ctx.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "sensor_data"
-    ));
-
-    ESP_LOGI(TAG_UROS, "Creating publisher: /%s/calibration_status", ROS_NAMESPACE);
-    RCCHECK(rclc_publisher_init_default(
-        &g_uros_ctx.calibration_response_publisher,
-        &g_uros_ctx.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "calibration_status"
-    ));
-
-    ESP_LOGI(TAG_UROS, "Creating subscriber: /%s/calibration_cmd", ROS_NAMESPACE);
-    RCCHECK(rclc_subscription_init_default(
-        &g_uros_ctx.calibration_subscriber,
-        &g_uros_ctx.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "calibration_cmd"
-    ));
-
-    /* Allocate memory for calibration command messages using micro_ros_utilities
-     * CRITICAL: Manual malloc is NOT compatible with XRCE-DDS deserialization.
-     * micro_ros_utilities_create_message_memory() properly initializes all
-     * internal structures that the XRCE-DDS middleware expects.
-     * Buffer size: 1024 bytes to safely handle 3-5 point calibration JSONs.
-     */
-    static micro_ros_utilities_memory_conf_t cal_cmd_conf = {0};
-    cal_cmd_conf.max_string_capacity = CAL_CMD_BUFFER_SIZE;
-
-    bool mem_ok = micro_ros_utilities_create_message_memory(
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        &g_uros_ctx.calibration_cmd_msg,
-        cal_cmd_conf
-    );
-    if (!mem_ok) {
-        ESP_LOGE(TAG_UROS, "FATAL: Failed to allocate calibration cmd buffer (%d bytes)", CAL_CMD_BUFFER_SIZE);
-        vTaskDelete(NULL);
-        return;
-    }
-    ESP_LOGI(TAG_UROS, "Calibration cmd buffer: %d bytes (via micro_ros_utilities)", CAL_CMD_BUFFER_SIZE);
-
-    ESP_LOGI(TAG_UROS, "Initializing executor (2 handles)");
-    RCCHECK(rclc_executor_init(&g_uros_ctx.executor,
-                               &g_uros_ctx.support.context, 2,
-                               &g_uros_ctx.allocator));
-
-    ESP_LOGI(TAG_UROS, "Adding calibration subscriber to executor");
-    RCCHECK(rclc_executor_add_subscription(
-        &g_uros_ctx.executor,
-        &g_uros_ctx.calibration_subscriber,
-        &g_uros_ctx.calibration_cmd_msg,
-        &calibration_callback,
-        ON_NEW_DATA
-    ));
-
-    g_uros_ctx.initialized = true;
-    g_app_state.microros_ready = true;
 
     /* Subscribe micro-ROS task to watchdog (CRITICAL: prevents silent deadlocks) */
     ESP_LOGI(TAG_UROS, "Subscribing micro-ROS task to watchdog...");
@@ -852,40 +225,33 @@ static void micro_ros_task(void *arg)
     uint32_t ping_counter = 0;
     const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;
 
+    // Main spin loop with connection monitoring
     while (1) {
-        /* Feed watchdog FIRST — prevents deadlock detection during long spin */
+        // Feed watchdog FIRST
         esp_task_wdt_reset();
 
-        rclc_executor_spin_some(&g_uros_ctx.executor, RCL_MS_TO_NS(100));
+        // Spin executor
+        uros_manager_spin_once(100);
 
+        // Periodic Agent ping
         if (++ping_counter >= ping_interval) {
             ping_counter = 0;
 
-            if (rmw_uros_ping_agent(PING_TIMEOUT_MS, 1) != RMW_RET_OK) {
+            if (!uros_manager_ping_agent()) {
                 ESP_LOGW(TAG_UROS, "⚠️ Lost connection to Agent");
                 
-                /* CRITICAL: Never restart - reconnect forever instead */
-                reconnect_forever();
+                // Reconnect forever
+                uros_manager_reconnect_forever();
                 
-                ESP_LOGI(TAG_UROS, "✅ Connection restored - resuming normal operation");
+                ESP_LOGI(TAG_UROS, "✅ Connection restored");
             }
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    /* Cleanup (unreachable but good practice) */
-    micro_ros_utilities_destroy_message_memory(
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        &g_uros_ctx.calibration_cmd_msg,
-        cal_cmd_conf
-    );
-    RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.calibration_response_publisher, &g_uros_ctx.node));
-    RCSOFTCHECK(rcl_subscription_fini(&g_uros_ctx.calibration_subscriber, &g_uros_ctx.node));
-    RCSOFTCHECK(rcl_publisher_fini(&g_uros_ctx.sensor_publisher, &g_uros_ctx.node));
-    RCSOFTCHECK(rclc_executor_fini(&g_uros_ctx.executor));
-    RCSOFTCHECK(rcl_node_fini(&g_uros_ctx.node));
-    RCSOFTCHECK(rclc_support_fini(&g_uros_ctx.support));
+    // Cleanup (unreachable but good practice)
+    uros_manager_deinit();
     vTaskDelete(NULL);
 }
 
@@ -900,6 +266,13 @@ void app_main(void)
     ESP_LOGI(TAG_MAIN, "  ESP-IDF: %s", esp_get_idf_version());
     ESP_LOGI(TAG_MAIN, "  micro-ROS: Jazzy");
     ESP_LOGI(TAG_MAIN, "=========================================");
+    
+    /* v4.0.0: Initialize application state manager */
+    ESP_ERROR_CHECK(app_state_init());
+    
+    /* v4.0.0: Initialize configuration manager with defaults */
+    ESP_LOGI(TAG_MAIN, "Initializing configuration manager...");
+    ESP_ERROR_CHECK(config_manager_init());
     
     /* Log reset reason (for diagnostics) */
     esp_reset_reason_t reset_reason = esp_reset_reason();
@@ -964,13 +337,14 @@ void app_main(void)
 
     /* Create sensor task on PRO_CPU */
     ESP_LOGI(TAG_MAIN, "Starting sensor task...");
+    TaskHandle_t sensor_handle = NULL;
     xTaskCreatePinnedToCore(
         sensor_task,
         "sensor_task",
         SENSOR_TASK_STACK,
         NULL,
         SENSOR_TASK_PRIO,
-        &g_sensor_task_handle,  /* v3.6.4: Save handle for stack monitoring */
+        &sensor_handle,
         0  /* PRO_CPU */
     );
 }
