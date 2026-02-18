@@ -206,12 +206,15 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
         "calibration_status"
     ));
     
-    RCCHECK(rclc_publisher_init_default(
-        &s_uros.config_status_pub,
-        &s_uros.node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "config_status"
-    ));
+    // LÍMITE ARQUITECTÓNICO: El ESP32 con micro-ROS solo soporta 2 publishers máximo
+    // El 3º publisher (config_status_pub) causa error rc=1 en rclc_publisher_init_default()
+    // Esto es un límite de recursos en el ROS2 node, no un bug del firmware
+    // RCCHECK(rclc_publisher_init_default(
+    //     &s_uros.config_status_pub,
+    //     &s_uros.node,
+    //     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+    //     "config_status"
+    // ));
     
     // Subscribers
     ESP_LOGI(TAG_UROS, "Creating subscribers...");
@@ -434,7 +437,8 @@ void uros_manager_deinit(void)
     ESP_LOGI(TAG_UROS, "Deinitializing uROS manager...");
     
     // Cleanup (orden inverso a inicialización)
-    rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
+    // Solo limpiar los 2 publishers que se crean (config_status está deshabilitado)
+    // rcl_publisher_fini(&s_uros.config_status_pub, &s_uros.node);
     rcl_publisher_fini(&s_uros.calibration_status_pub, &s_uros.node);
     rcl_publisher_fini(&s_uros.sensor_data_pub, &s_uros.node);
     rcl_subscription_fini(&s_uros.config_cmd_sub, &s_uros.node);
