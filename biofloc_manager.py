@@ -805,8 +805,9 @@ def read_sensor_voltage(sensor_id, device_id=None):
         print_info("  ALGORITMO DE ESTABILIZACIÓN DE SENSOR BIOLÓGICO")
         print_info("═══════════════════════════════════════════════════════════════")
         print_info("Metodología:")
-        print_info("  • Ventana deslizante de 30 muestras")
-        print_info("  • Cálculo de promedio y desviación estándar en tiempo real")
+        print_info("  • Fase warmup: 10 muestras de estabilización (descartadas)")
+        print_info("  • Ventana deslizante de 30 muestras reales")
+        print_info("  • Cálculo de MEDIANA y desviación estándar en tiempo real")
         print_info("  • Estabilización exitosa: ≥3 min Y σ <0.005V")
         print_info("")
         print_info("Criterios de finalización:")
@@ -816,10 +817,13 @@ def read_sensor_voltage(sensor_id, device_id=None):
         print_info("")
         
         # Sliding window for statistical analysis
-        voltage_window = deque(maxlen=30)  # Last 30 samples
+        voltage_window = deque(maxlen=30)  # Last 30 samples for median calculation
+        warmup_samples = []  # First 10 samples discarded (stabilization phase)
         start_time = time.time()
         sample_count = 0
+        warmup_count = 0
         stable_readings = 0
+        min_warmup_samples = 10  # Discard first 10 samples (sensor stabilization)
         min_stable_time_sec = 180  # 3 minutes
         max_std_dev = 0.005  # 0.005V threshold
         
@@ -895,15 +899,22 @@ def read_sensor_voltage(sensor_id, device_id=None):
                     voltage = sensor_data.get('voltage')
                     
                     if voltage is not None:
-                        voltage_window.append(voltage)
-                        sample_count += 1
+                        # Warmup phase: discard first 10 samples
+                        if warmup_count < min_warmup_samples:
+                            warmup_samples.append(voltage)
+                            warmup_count += 1
+                        else:
+                            voltage_window.append(voltage)
+                            sample_count += 1
         except Exception:
             pass
         
+        if warmup_count > 0:
+            print_info(f"✓ Fase warmup completada ({warmup_count} muestras descartadas)")
         print_info("✓ Sensor detectado, iniciando monitoreo en tiempo real...")
         print_info("")
         print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{'Tiempo':>8} | {'Voltaje':>10} | {'Promedio':>10} | {'σ (Std Dev)':>12} | {'Muestras':>10} | {'Estado':>30}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{'Tiempo':>8} | {'Voltaje':>10} | {'Mediana':>10} | {'σ (Std Dev)':>12} | {'Muestras':>10} | {'Estado':>30}{Colors.ENDC}")
         print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
         
         try:
@@ -916,7 +927,7 @@ def read_sensor_voltage(sensor_id, device_id=None):
                     elapsed = time.time() - start_time
                     if len(voltage_window) > 0:
                         current_v = voltage_window[-1]
-                        avg_v = statistics.mean(voltage_window)
+                        median_v = statistics.median(voltage_window)
                         std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
                         
                         # Check stability
@@ -931,19 +942,19 @@ def read_sensor_voltage(sensor_id, device_id=None):
                             remain_sec = int(min_stable_time_sec - elapsed)
                             status = f"{Colors.OKCYAN}Estabilizando... ({remain_sec}s){Colors.ENDC}"
                         
-                        print(f"\r{int(elapsed):>7}s | {current_v:>9.4f}V | {avg_v:>9.4f}V | {std_dev:>11.6f}V | {len(voltage_window):>10} | {status:<40}", end='', flush=True)
+                        print(f"\r{int(elapsed):>7}s | {current_v:>9.4f}V | {median_v:>9.4f}V | {std_dev:>11.6f}V | {len(voltage_window):>10} | {status:<40}", end='', flush=True)
                         
                         # Auto-finish if stable for 3 consecutive readings
                         if stable_readings >= 3:
                             print()  # New line
                             print(f"{Colors.BOLD}{'─' * 110}{Colors.ENDC}")
                             print_success(f"✓ ESTABILIZACIÓN COMPLETADA AUTOMÁTICAMENTE")
-                            print_info(f"  Voltaje promedio: {avg_v:.4f}V")
+                            print_info(f"  Voltaje mediana: {median_v:.4f}V (más robusto que promedio)")
                             print_info(f"  Desviación estándar: {std_dev:.6f}V")
                             print_info(f"  Tiempo total: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
                             print_info(f"  Muestras procesadas: {len(voltage_window)}")
                             stop_event.set()
-                            return avg_v
+                            return median_v
                     
                     continue
                 
@@ -969,6 +980,12 @@ def read_sensor_voltage(sensor_id, device_id=None):
                     if voltage is None:
                         continue
                     
+                    # Warmup phase: discard first 10 samples
+                    if warmup_count < min_warmup_samples:
+                        warmup_samples.append(voltage)
+                        warmup_count += 1
+                        continue
+                    
                     # Add to sliding window
                     voltage_window.append(voltage)
                     sample_count += 1
@@ -987,13 +1004,14 @@ def read_sensor_voltage(sensor_id, device_id=None):
                 stop_event.set()
                 return None
             
-            avg_v = statistics.mean(voltage_window)
+            median_v = statistics.median(voltage_window)
             std_dev = statistics.stdev(voltage_window) if len(voltage_window) > 1 else 0.0
             elapsed = time.time() - start_time
             
-            print_info(f"  Voltaje promedio: {avg_v:.4f}V")
+            print_info(f"  Voltaje mediana: {median_v:.4f}V (más robusto que promedio)")
             print_info(f"  Desviación estándar: {std_dev:.6f}V")
             print_info(f"  Tiempo transcurrido: {int(elapsed)}s ({int(elapsed/60)}:{int(elapsed%60):02d})")
+            print_info(f"  Muestras warmup descartadas: {warmup_count}")
             print_info(f"  Muestras procesadas: {len(voltage_window)}")
             
             if std_dev >= max_std_dev:
@@ -1004,12 +1022,12 @@ def read_sensor_voltage(sensor_id, device_id=None):
                 print_warning(f"  ⚠ Tiempo insuficiente ({int(elapsed)}s < {min_stable_time_sec}s)")
                 print_warning(f"  Recomendación: Idealmente esperar ≥3 minutos")
             
-            confirm = input(f"\n{Colors.WARNING}¿Usar este promedio de todas formas? (s/N): {Colors.ENDC}").strip().lower()
+            confirm = input(f"\n{Colors.WARNING}¿Usar esta mediana de todas formas? (s/N): {Colors.ENDC}").strip().lower()
             stop_event.set()
             
             if confirm == 's':
-                print_success(f"✓ Usando voltaje promedio: {avg_v:.4f}V")
-                return avg_v
+                print_success(f"✓ Usando voltaje mediana: {median_v:.4f}V")
+                return median_v
             else:
                 print_info("Medición cancelada")
                 return None

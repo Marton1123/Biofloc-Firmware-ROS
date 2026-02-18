@@ -640,6 +640,9 @@ static void send_calibration_ack(const char *response)
  */
 static void calibration_callback(const void *msgin)
 {
+    /* CRITICAL: Feed watchdog at start to prevent timeout during calibration */
+    esp_task_wdt_reset();
+    
     /* Static buffers — off the stack to reduce pressure on the 20KB task stack */
     static char safe_buffer[CAL_CMD_BUFFER_SIZE];
     static char response[CAL_RESPONSE_SIZE];
@@ -696,6 +699,9 @@ static void calibration_callback(const void *msgin)
     execute_calibration_action(root, sensor_type, sensor_str, action,
                                response, sizeof(response));
     ESP_LOGI(TAG_UROS, "✓ Action executed");
+    
+    /* CRITICAL: Feed watchdog after calibration execution */
+    esp_task_wdt_reset();
 
     /* Step 4: Cleanup + send ACK (ALWAYS, even on error) */
     ESP_LOGI(TAG_UROS, "[4/4] Sending ACK...");
