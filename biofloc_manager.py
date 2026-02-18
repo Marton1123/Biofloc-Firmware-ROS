@@ -1242,17 +1242,15 @@ def publish_calibration_command(json_cmd, device_id=None):
         time.sleep(2)
         
         # ── Step 2: Publish calibration command ──
-        # CRITICAL FIX v3.6.2: Escape double quotes for shell, preserve JSON structure
-        # Old method used single quotes which caused ROS2 to parse as YAML, stripping
-        # all double quotes from JSON keys/values, breaking cJSON parsing in ESP32
-        json_escaped = json_cmd.replace('"', '\\"')
+        # CRITICAL FIX v4.0.1: Use single quotes exterior, preserve JSON structure
+        # Format: ros2 topic pub --once /topic 'Type' 'data: <JSON with preserved double quotes>'
         
         pub_cmd = [
             'bash', '-c',
             f'source /opt/ros/jazzy/setup.bash && '
             f'source ~/microros_ws/install/local_setup.bash && '
-            f'ros2 topic pub --once /biofloc/calibration_cmd '
-            f'std_msgs/msg/String "data: \\\"{json_escaped}\\\""'
+            f"ros2 topic pub --once /biofloc/calibration_cmd "
+            f"std_msgs/msg/String 'data: {json_cmd}'"
         ]
         
         print_info(f"Enviando comando al ESP32: {json_cmd[:100]}{'...' if len(json_cmd) > 100 else ''}")
