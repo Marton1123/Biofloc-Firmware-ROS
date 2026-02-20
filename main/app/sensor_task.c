@@ -60,8 +60,7 @@ void sensor_task(void *arg)
     while (!state->uros_ready && wait_cycles < 120) {
         if (wait_cycles % 10 == 0) ESP_LOGI(TAG_SENSOR, "Waiting for Agent...");
         
-        /* CRÍTICO: Hacer spin aquí también para procesar el handshake inicial */
-        uros_manager_spin_once(10); 
+        // ELIMINADO: uros_manager_spin_once(10); <- Ya no es necesario, uros_task lo maneja
         
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_task_wdt_reset();
@@ -73,16 +72,19 @@ void sensor_task(void *arg)
     while (1) {
         esp_task_wdt_reset();
 
-        /* 1. CRÍTICO: ESCUCHAR LA RED (Arregla la "sordera") */
-        /* Damos 10ms al procesador para leer comandos de calibración */
-        uros_manager_spin_once(10);
-
-        /* 2. Leer Sensores */
         const app_state_t *current_state = app_state_get();
+
+        /* PROTECCIÓN DE HARDWARE: Si estamos calibrando, soltamos el procesador y no tocamos el ADC */
+        if (app_state_is_calibrating()) {
+            vTaskDelay(pdMS_TO_TICKS(100)); // Espera corta para no asfixiar el scheduler
+            continue; // Salta de vuelta al inicio del while(1), esquivando el sensors_read_all
+        }
+
+        /* 2. Leer Sensores (Solo ocurre si NO estamos calibrando) */
         if (sensors_read_all(&sensor_data) == ESP_OK) {
             
             /* Lógica Normal: Agregar y Publicar */
-            if (current_state->sensor_config.enabled && !app_state_is_calibrating()) {
+            if (current_state->sensor_config.enabled) {
                 data_aggregator_add_sample(&sensor_data);
 
                 if (data_aggregator_should_publish()) {
@@ -96,18 +98,8 @@ void sensor_task(void *arg)
                     }
                 }
             }
-            /* Lógica Calibración: Publicar Raw (Keep-Alive) */
-            else if (app_state_is_calibrating()) {
-                /* Publicar cada lectura directamente para mantener vivo el link */
-                int len = sensors_to_json(&sensor_data, json_buffer, sizeof(json_buffer),
-                                          current_state->device_info.device_id, DEVICE_LOCATION);
-                if (len > 0) {
-                    uros_manager_publish_sensor_data(json_buffer, (size_t)len);
-                }
-            }
         }
 
         /* 3. Esperar ciclo */
         vTaskDelay(pdMS_TO_TICKS(current_state->sensor_config.sample_interval_ms));
     }
-}
