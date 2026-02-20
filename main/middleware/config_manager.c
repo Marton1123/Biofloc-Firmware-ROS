@@ -129,7 +129,7 @@ void config_manager_command_callback(const void *msgin)
         new_config.samples_per_publish = (uint32_t)samples->valueint;
         new_config.enabled = enabled ? (bool)enabled->valueint : true;
         
-        // Parsear mode usando el helper que ya tenías
+        // Parsear mode
         const char *mode_str = mode_obj->valuestring;
         new_config.mode = string_to_mode(mode_str);
         
@@ -141,8 +141,7 @@ void config_manager_command_callback(const void *msgin)
             return;
         }
         
-        /* CORRECCIÓN 1: Aplicar configuración de forma segura a través del gestor de estado */
-        // NOTA: Debes agregar esta función en app_state.c/.h (ver instrucciones abajo)
+        // Aplicar a app_state de forma segura
         app_state_set_sensor_config(&new_config);
         
         // Guardar en NVS
@@ -160,7 +159,7 @@ void config_manager_command_callback(const void *msgin)
         ESP_LOGI(TAG, "✓ Config applied: sample=%lums, publish=%lums, mode=%s, samples=%u",
                  new_config.sample_interval_ms,
                  new_config.publish_interval_ms,
-                 mode_to_string(new_config.mode),
+                 mode_str,
                  (unsigned)new_config.samples_per_publish);
         
         // Reinicializar data_aggregator
@@ -176,14 +175,14 @@ void config_manager_command_callback(const void *msgin)
 esp_err_t config_manager_apply_defaults(void)
 {
     sensor_config_t default_config = {
-        .sample_interval_ms = SAMPLE_INTERVAL_MS,      // 4000ms desde config.h
-        .publish_interval_ms = SAMPLE_INTERVAL_MS,     // 4000ms (instant mode)
+        .sample_interval_ms = 4000,     
+        .publish_interval_ms = 4000,    
         .mode = DATA_MODE_INSTANT,
         .samples_per_publish = 1,
         .enabled = true
     };
     
-    /* CORRECCIÓN 2: Escribir defaults de forma segura usando el setter */
+    // Escribir defaults de forma segura
     app_state_set_sensor_config(&default_config);
     
     ESP_LOGI(TAG, "✓ Default configuration applied (instant mode, 4s interval)");
@@ -196,7 +195,7 @@ int config_manager_get_config_json(char *json_buffer, size_t buffer_size)
         return -1;
     }
     
-    /* CORRECCIÓN 3: Leer el estado usando la API segura por copia */
+    // Leer el estado usando la API segura por copia
     app_state_t state_copy;
     if (app_state_get(&state_copy) != ESP_OK) {
         return -1;
