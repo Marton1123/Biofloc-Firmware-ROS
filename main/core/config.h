@@ -1,12 +1,10 @@
 /**
  * @file config.h
  * @brief Configuración global del firmware Biofloc
- * 
- * Centraliza TODAS las constantes de configuración siguiendo
+ * * Centraliza TODAS las constantes de configuración siguiendo
  * principio de Single Responsibility. No hay magic numbers en el código.
- * 
- * @version 4.0.0
- * @date 2026-02-18
+ * * @version 4.1.2
+ * @date 2026-02-20
  */
 
 #ifndef BIOFLOC_CONFIG_H
@@ -18,7 +16,7 @@
  * VERSIÓN DEL FIRMWARE
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "4.0.0"
+#define FIRMWARE_VERSION        "4.1.2"
 #define FIRMWARE_BUILD_DATE     __DATE__
 #define FIRMWARE_BUILD_TIME     __TIME__
 
@@ -122,15 +120,17 @@
 
 /* ============================================================================
  * LOGGING TAGS
+ * CORRECCIÓN: Se cambiaron las variables 'static const char*' por '#define'
+ * para evitar los warnings de "defined but not used" en el compilador de GCC.
  * ============================================================================ */
 
-static const char* TAG_MAIN        = "BIOFLOC";
-static const char* TAG_WIFI        = "WIFI";
-static const char* TAG_UROS        = "UROS";
-static const char* TAG_SENSOR      = "SENSOR";
-static const char* TAG_CALIBRATION = "CALIBRATE";
-static const char* TAG_NVS         = "NVS";
-static const char* TAG_WATCHDOG    = "WATCHDOG";
+#define TAG_MAIN        "BIOFLOC"
+#define TAG_WIFI        "WIFI"
+#define TAG_UROS        "UROS"
+#define TAG_SENSOR      "SENSOR"
+#define TAG_CALIBRATION "CALIBRATE"
+#define TAG_NVS         "NVS"
+#define TAG_WATCHDOG    "WATCHDOG"
 
 /* ============================================================================
  * VALIDACIÓN DE CONFIGURACIÓN
