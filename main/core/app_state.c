@@ -1,8 +1,7 @@
 /**
  * @file app_state.c
- * @brief Implementación del gestor de estado global
- * 
- * @version 4.0.0
+ * @brief Implementación del gestor de estado global (Thread-Safe v4.1.1)
+ * * @version 4.1.1
  */
 
 #include "app_state.h"
@@ -56,26 +55,38 @@ esp_err_t app_state_init(void)
     }
     
     /* Inicializar estado por defecto */
-    memset(&g_app_state, 0, sizeof(g_app_state));
-    g_app_state.wifi_state = WIFI_STATE_DISCONNECTED;
-    g_app_state.uros_state = UROS_STATE_DISCONNECTED;
-    g_app_state.calibrating = false;
-    
-    /* Inicializar configuración de sensores con valores por defecto (modo instant, 4s) */
-    g_app_state.sensor_config.sample_interval_ms = 4000;
-    g_app_state.sensor_config.publish_interval_ms = 4000;
-    g_app_state.sensor_config.mode = DATA_MODE_INSTANT;
-    g_app_state.sensor_config.samples_per_publish = 1;
-    g_app_state.sensor_config.enabled = true;
+    if (take_mutex()) {
+        memset(&g_app_state, 0, sizeof(g_app_state));
+        g_app_state.wifi_state = WIFI_STATE_DISCONNECTED;
+        g_app_state.uros_state = UROS_STATE_DISCONNECTED;
+        g_app_state.calibrating = false;
+        
+        /* Inicializar configuración de sensores con valores por defecto (modo instant, 4s) */
+        g_app_state.sensor_config.sample_interval_ms = 4000;
+        g_app_state.sensor_config.publish_interval_ms = 4000;
+        g_app_state.sensor_config.mode = DATA_MODE_INSTANT;
+        g_app_state.sensor_config.samples_per_publish = 1;
+        g_app_state.sensor_config.enabled = true;
+        
+        give_mutex();
+    }
     
     ESP_LOGI(TAG_MAIN, "Application state initialized");
     ESP_LOGI(TAG_MAIN, "  Sensor config: sample=4000ms, publish=4000ms, mode=instant");
     return ESP_OK;
 }
 
-const app_state_t *app_state_get(void)
+/* NUEVA VERSIÓN: Retorna una copia por valor, no un puntero desnudo */
+esp_err_t app_state_get(app_state_t *out_state)
 {
-    return &g_app_state;
+    if (!out_state) return ESP_ERR_INVALID_ARG;
+    
+    if (take_mutex()) {
+        memcpy(out_state, &g_app_state, sizeof(app_state_t));
+        give_mutex();
+        return ESP_OK;
+    }
+    return ESP_FAIL;
 }
 
 void app_state_set_wifi(wifi_state_t state)
@@ -113,9 +124,15 @@ void app_state_exit_calibration(void)
     }
 }
 
+/* NUEVA VERSIÓN: Lectura del booleano protegida por Mutex */
 bool app_state_is_calibrating(void)
 {
-    return g_app_state.calibrating;
+    bool is_cal = false;
+    if (take_mutex()) {
+        is_cal = g_app_state.calibrating;
+        give_mutex();
+    }
+    return is_cal;
 }
 
 void app_state_inc_publish_count(void)
