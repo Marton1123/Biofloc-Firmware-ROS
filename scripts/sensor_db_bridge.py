@@ -309,6 +309,7 @@ class SensorDBBridge(Node):
                     self.get_logger().warning(f"Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
                     self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
 
+            # Construir update_dict usando solo subcampos para evitar conflictos de rutas
             update_dict = {
                 '$set': {
                     'conexion.ultima': timestamp,
@@ -329,9 +330,7 @@ class SensorDBBridge(Node):
                         'temperatura': '°C',
                         'ph': 'pH'
                     },
-                    'conexion': {
-                        'primera': timestamp
-                    }
+                    'conexion.primera': timestamp
                 }
             }
             self.get_logger().info(f"[DEBUG] update_one dict para {device_id}: {update_dict}")
