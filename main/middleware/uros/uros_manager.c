@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_task_wdt.h"
 
 #include <uros_network_interfaces.h>
 #include <rcl/error_handling.h>
@@ -384,7 +385,7 @@ bool uros_manager_ping_agent(void)
     
     int attempts = 0;
     while (attempts < PING_RETRIES) {
-        rmw_ret_t ping_ret = rmw_uros_ping_agent(PING_TIMEOUT_MS, 1);
+        rmw_ret_t ping_ret = rmw_uros_ping_agent_options(PING_TIMEOUT_MS, 1, rmw_options);
         if (ping_ret == RMW_RET_OK) {
             return true;
         }
@@ -406,6 +407,8 @@ void uros_manager_reconnect_forever(void)
     app_state_set_uros(UROS_STATE_CONNECTING);
     
     while (1) {
+
+        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(5000));
         
         if (uros_manager_ping_agent()) {
