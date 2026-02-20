@@ -14,11 +14,11 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h" /* AÑADIDO: Para Mutex interno */
+#include "freertos/semphr.h" 
 #include "esp_log.h"
-#include "esp_system.h"      /* esp_reset_reason() */
-#include "esp_timer.h"       /* esp_timer_get_time() for uptime */
-#include "esp_heap_caps.h"   /* esp_get_free_heap_size() */
+#include "esp_system.h"      
+#include "esp_timer.h"       
+#include "esp_heap_caps.h"   
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -81,7 +81,7 @@
 
 static const char *TAG = "SENSORS";
 
-/* CORRECCIÓN 2: Mutex para proteger la estructura s_ctx de race conditions */
+/* Mutex para proteger la estructura s_ctx de race conditions */
 static SemaphoreHandle_t s_sensor_mutex = NULL;
 
 /* NVS namespace for calibration data */
@@ -419,13 +419,11 @@ esp_err_t sensors_read_ph(sensor_reading_t *reading)
     /* Copiar datos de calibración localmente para minimizar el tiempo de bloqueo */
     float local_slope = PH_CONVERSION_FACTOR;
     float local_offset = 0.0f;
-    bool is_calibrated = false;
 
     if (lock_sensors()) {
         if (s_ctx.ph_cal.enabled) {
             local_slope = s_ctx.ph_cal.slope;
             local_offset = s_ctx.ph_cal.offset;
-            is_calibrated = true;
         }
         unlock_sensors();
     }
