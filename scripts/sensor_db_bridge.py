@@ -303,41 +303,47 @@ class SensorDBBridge(Node):
         try:
             # Validar y limpiar el campo 'conexion' si no es un objeto
             doc = self.devices_collection.find_one({'_id': device_id})
-            if doc and 'conexion' in doc and not isinstance(doc['conexion'], dict):
-                self.get_logger().warning(f"Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
-                self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
+            if doc and 'conexion' in doc:
+                self.get_logger().info(f"[DEBUG] Valor actual de 'conexion' en DB para {device_id}: {repr(doc['conexion'])} (tipo: {type(doc['conexion']).__name__})")
+                if not isinstance(doc['conexion'], dict):
+                    self.get_logger().warning(f"Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
+                    self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
 
+            update_dict = {
+                '$set': {
+                    'conexion.ultima': timestamp,
+                    'estado': 'activo',
+                    'location': location
+                },
+                '$inc': {
+                    'conexion.total_lecturas': 1
+                },
+                '$setOnInsert': {
+                    'alias': f'ESP32-{device_id[-4:]}',
+                    'auto_registrado': True,
+                    'firmware_version': 'unknown',
+                    'intervalo_lectura_seg': 4,
+                    'sensores_habilitados': ['ph', 'temperatura'],
+                    'umbrales': {},
+                    'unidades': {
+                        'temperatura': '°C',
+                        'ph': 'pH'
+                    },
+                    'conexion': {
+                        'primera': timestamp
+                    }
+                }
+            }
+            self.get_logger().info(f"[DEBUG] update_one dict para {device_id}: {update_dict}")
             self.devices_collection.update_one(
                 {'_id': device_id},
-                {
-                    '$set': {
-                        'conexion.ultima': timestamp,
-                        'estado': 'activo',
-                        'location': location
-                    },
-                    '$inc': {
-                        'conexion.total_lecturas': 1
-                    },
-                    '$setOnInsert': {
-                        'alias': f'ESP32-{device_id[-4:]}',
-                        'auto_registrado': True,
-                        'firmware_version': 'unknown',
-                        'intervalo_lectura_seg': 4,
-                        'sensores_habilitados': ['ph', 'temperatura'],
-                        'umbrales': {},
-                        'unidades': {
-                            'temperatura': '°C',
-                            'ph': 'pH'
-                        },
-                        'conexion': {
-                            'primera': timestamp
-                        }
-                    }
-                },
+                update_dict,
                 upsert=True
             )
         except Exception as e:
-            self.get_logger().error(f"Error atomic updating device metadata: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            self.get_logger().error(f"Error atomic updating device metadata: {e}\nTraceback:\n{tb}")
     
     def _log_sensor_data(self, data: dict, system_data: dict = None) -> None:
         """Display sensor data and system telemetry in the log."""
