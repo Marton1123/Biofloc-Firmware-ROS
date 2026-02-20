@@ -1,5 +1,5 @@
 # ==============================================================================
-# Biofloc Firmware v4.0 - Main Component CMakeLists.txt
+# Biofloc Firmware v4.1.2 - Main Component CMakeLists.txt
 # Arquitectura modular con separación de responsabilidades
 # ==============================================================================
 
@@ -21,7 +21,7 @@ idf_component_register(
         # HAL - Hardware Abstraction Layer
         "hal/sensors/sensors.c"
         
-        # Application Layer
+        # Application Layer (CORRECCIÓN: Ruta ajustada para el Linker)
         "app/sensor_task.c"
         
     INCLUDE_DIRS 
@@ -32,7 +32,6 @@ idf_component_register(
         "drivers"
         "middleware/uros"
         "middleware/calibration"
-        "app"
         "app"
         
     REQUIRES 
