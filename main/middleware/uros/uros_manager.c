@@ -242,9 +242,12 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
     // CRÍTICO: Inicializar buffers para mensajes de entrada ANTES del executor
     ESP_LOGI(TAG_UROS, "Initializing message buffers...");
     
-    // Asignar buffers estáticos para mensajes entrantes
+    // Asignar buffers estáticos para mensajes entrantes (subscribers)
     static char calibration_buffer[1024];
     static char config_buffer[1024];
+    
+    // Buffer estático para mensajes salientes (publishers) - evita heap corruption
+    static char calibration_status_buffer[512];
     
     s_uros.calibration_cmd_msg.data.data = calibration_buffer;
     s_uros.calibration_cmd_msg.data.size = 0;
@@ -331,6 +334,9 @@ esp_err_t uros_manager_publish_sensor_data(const char *json_data, size_t json_le
 
 esp_err_t uros_manager_publish_calibration_status(const char *json_response, size_t response_len)
 {
+    // Buffer estático que persiste después de que la función retorne
+    static char calibration_status_buffer[512];
+    
     if (!s_uros.initialized) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -339,11 +345,21 @@ esp_err_t uros_manager_publish_calibration_status(const char *json_response, siz
         return ESP_ERR_INVALID_ARG;
     }
     
-    // CRITICAL: Use the same pattern as v3.6.5 which worked
-    // Direct pointer assignment followed by immediate publish
-    s_uros.calibration_status_msg.data.data = (char *)json_response;
+    // Validar tamaño
+    if (response_len >= sizeof(calibration_status_buffer)) {
+        ESP_LOGE(TAG_UROS, "Calibration status too large: %zu >= %zu", 
+                 response_len, sizeof(calibration_status_buffer));
+        return ESP_ERR_INVALID_SIZE;
+    }
+    
+    // CRÍTICO: Copiar a buffer estático en lugar de asignar puntero
+    // Esto evita heap corruption cuando micro-ROS intenta acceder al puntero después
+    memcpy(calibration_status_buffer, json_response, response_len);
+    calibration_status_buffer[response_len] = '\0';
+    
+    s_uros.calibration_status_msg.data.data = calibration_status_buffer;
     s_uros.calibration_status_msg.data.size = response_len;
-    s_uros.calibration_status_msg.data.capacity = response_len;
+    s_uros.calibration_status_msg.data.capacity = sizeof(calibration_status_buffer);
     
     rcl_ret_t ret = rcl_publish(&s_uros.calibration_status_pub,
                                 &s_uros.calibration_status_msg, NULL);

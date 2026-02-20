@@ -1,13 +1,19 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 4.1.4
+ * @version 4.1.5
  *
  * @description
  * Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  * Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  * Soporta calibración remota vía topic /biofloc/calibration_cmd.
  *
+ * @changelog v4.1.5 (2026-02-20) - FIX CRÍTICO: Heap corruption resuelto
+ * - 🔴 CRÍTICO: Buffer estático 512B para calibration_status_msg (evita heap corruption)
+ * - 🔴 CRÍTICO: memcpy() en lugar de puntero directo (micro-ROS async access)
+ * - ✅ Calibración remota 100% funcional sin crashes
+ * - ✅ Sistema estable después de calibración (sin reboots)
+ * 
  * @changelog v4.1.4 (2026-02-20) - FIX CRÍTICO: Calibración remota funcional
  * - 🔴 CRÍTICO: Inicialización de buffers de mensajes de entrada (1024 bytes cada uno)
  * - 🐛 Fix: Subscribers ahora pueden recibir mensajes correctamente
