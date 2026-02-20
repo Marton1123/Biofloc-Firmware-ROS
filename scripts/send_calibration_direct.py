@@ -4,12 +4,43 @@ Send calibration command directly without re-measuring
 Useful when you already have the 3 points and just need to send them
 """
 
-import subprocess
 import json
 import time
 import sys
-import tempfile
-import os
+import threading
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+
+class CalibrationClient(Node):
+    def __init__(self):
+        super().__init__('calibration_client')
+        self.publisher = self.create_publisher(String, '/biofloc/calibration_cmd', 10)
+        self.subscription = self.create_subscription(
+            String,
+            '/biofloc/calibration_status',
+            self.ack_callback,
+            10
+        )
+        self.ack_received = None
+        self.ack_event = threading.Event()
+        
+    def ack_callback(self, msg):
+        """Called when ACK is received from ESP32"""
+        self.ack_received = msg.data
+        self.ack_event.set()
+    
+    def send_command(self, cmd_json):
+        """Publish calibration command"""
+        msg = String()
+        msg.data = cmd_json
+        self.publisher.publish(msg)
+        self.get_logger().info(f'✓ Command published: {len(cmd_json)} bytes')
+    
+    def wait_for_ack(self, timeout=120.0):
+        """Wait for ACK with timeout"""
+        return self.ack_event.wait(timeout)
 
 def send_calibration(device_id, points, sensor_id='ph'):
     """Send calibration command directly to ESP32"""
@@ -29,106 +60,73 @@ def send_calibration(device_id, points, sensor_id='ph'):
         print(f"     Punto {i}: {p['voltage']:.3f}V → {p['value']} {sensor_id}")
     print()
     
-    # Step 1: Start ACK listener BEFORE sending
-    print("⏳ Preparando listener de ACK...")
-    ack_cmd = [
-        'bash', '-c',
-        'source /opt/ros/jazzy/setup.bash && '
-        'source ~/microros_ws/install/local_setup.bash && '
-        'timeout 120 ros2 topic echo --once --full-length '
-        '/biofloc/calibration_status std_msgs/msg/String 2>&1'
-    ]
-    
-    ack_process = subprocess.Popen(
-        ack_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    
-    time.sleep(2)
-    
-    # Step 2: Publish calibration command
-    # Write JSON to temp file to avoid shell quote escaping issues
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        f.write(cmd_json)
-        tmp_file = f.name
+    # Initialize ROS2
+    rclpy.init()
     
     try:
-        pub_cmd = [
-            'bash', '-c',
-            f'source /opt/ros/jazzy/setup.bash && '
-            f'source ~/microros_ws/install/local_setup.bash && '
-            f'ros2 topic pub --once /biofloc/calibration_cmd '
-            f'std_msgs/msg/String "{{data: \\"$(cat {tmp_file})\\"}}"'
-        ]
+        client = CalibrationClient()
+        
+        print("⏳ Esperando 2s para establecer conexiones...")
+        time.sleep(2)
         
         print(f"📡 Publicando comando al ESP32...")
         print(f"   JSON: {cmd_json}")
         print()
-        pub_result = subprocess.run(pub_cmd, capture_output=True, text=True, timeout=15)
+        
+        client.send_command(cmd_json)
+        
+        print(f"✓ Comando enviado, esperando ACK (120s)...")
+        print()
+        
+        # Spin in background while waiting for ACK
+        executor = rclpy.executors.SingleThreadedExecutor()
+        executor.add_node(client)
+        
+        spin_thread = threading.Thread(target=executor.spin, daemon=True)
+        spin_thread.start()
+        
+        # Wait for ACK with timeout
+        if not client.wait_for_ack(timeout=120.0):
+            print("❌ TIMEOUT: No se recibió ACK del ESP32 en 120s")
+            return False
+        
+        executor.shutdown()
+        
+        # Parse ACK
+        try:
+            # Debug raw data
+            response_data = client.ack_received
+            print(f"🔍 DEBUG - Raw data recibido ({len(response_data)} bytes):")
+            print(f"   HEX: {response_data.encode().hex()}")
+            print(f"   ASCII: {repr(response_data)}")
+            print()
+            
+            response_json = json.loads(response_data)
+        except json.JSONDecodeError as e:
+            print(f"⚠ ACK recibido pero JSON inválido: {e}")
+            print(f"   Raw data: {repr(client.ack_received[:500])}")
+            return False
+        
+        # Check status
+        if response_json.get('status') == 'success':
+            print("✅ ¡ÉXITO! ESP32 confirmó calibración")
+            if 'slope' in response_json:
+                print(f"   Slope: {response_json['slope']:.6f}")
+            if 'offset' in response_json:
+                print(f"   Offset: {response_json['offset']:.6f}")
+            if 'r_squared' in response_json:
+                print(f"   R²: {response_json['r_squared']:.4f}")
+            print()
+            print("✅ Calibración guardada en NVS del ESP32")
+            return True
+        else:
+            error_msg = response_json.get('message', 'Error desconocido')
+            print(f"❌ ESP32 reportó error: {error_msg}")
+            return False
+            
     finally:
-        os.unlink(tmp_file)
-    
-    if pub_result.returncode != 0:
-        print(f"❌ Error publicando: {pub_result.stderr}")
-        ack_process.kill()
-        ack_process.wait()
-        return False
-    
-    print(f"✓ Comando enviado, esperando ACK (120s)...")
-    print()
-    
-    # Step 3: Wait for ACK
-    try:
-        ack_stdout, ack_stderr = ack_process.communicate(timeout=120)
-    except subprocess.TimeoutExpired:
-        ack_process.kill()
-        ack_process.wait()
-        print("❌ TIMEOUT: No se recibió ACK del ESP32 en 120s")
-        return False
-    
-    if ack_process.returncode != 0 or 'data:' not in (ack_stdout or ''):
-        print("❌ No se recibió respuesta válida del ESP32")
-        print(f"   Return code: {ack_process.returncode}")
-        print(f"   STDOUT: {ack_stdout[:200] if ack_stdout else 'None'}")
-        print(f"   STDERR: {ack_stderr[:200] if ack_stderr else 'None'}")
-        return False
-    
-    # Step 4: Parse ACK
-    try:
-        response_data = ack_stdout.split('data:', 1)[1].strip()
-        if response_data.startswith("'") or response_data.startswith('"'):
-            response_data = response_data[1:]
-        if response_data.endswith("'") or response_data.endswith('"'):
-            response_data = response_data[:-1]
-        response_data = response_data.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
-        
-        # DEBUG: Print raw data
-        print(f"🔍 DEBUG - Raw data recibido ({len(response_data)} bytes):")
-        print(f"   HEX: {response_data.encode().hex()}")
-        print(f"   ASCII: {repr(response_data)}")
-        print()
-        
-        response_json = json.loads(response_data)
-    except (json.JSONDecodeError, IndexError, AttributeError) as e:
-        print(f"⚠ ACK recibido pero JSON inválido: {e}")
-        print(f"   Raw stdout: {repr(ack_stdout[:500])}")
-        return False
-    
-    # Step 5: Check status
-    if response_json.get('status') == 'success':
-        print("✅ ¡ÉXITO! ESP32 confirmó calibración")
-        if 'slope' in response_json:
-            print(f"   Slope: {response_json['slope']:.6f}")
-        if 'offset' in response_json:
-            print(f"   Offset: {response_json['offset']:.6f}")
-        if 'r_squared' in response_json:
-            print(f"   R²: {response_json['r_squared']:.4f}")
-        print()
-        print("✅ Calibración guardada en NVS del ESP32")
-        return True
-    else:
-        error_msg = response_json.get('message', 'Error desconocido')
-        print(f"❌ ESP32 reportó error: {error_msg}")
-        return False
+        client.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     # Calibration points from user's last successful measurement
