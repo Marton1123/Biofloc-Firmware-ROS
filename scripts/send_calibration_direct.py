@@ -8,6 +8,8 @@ import subprocess
 import json
 import time
 import sys
+import tempfile
+import os
 
 def send_calibration(device_id, points, sensor_id='ph'):
     """Send calibration command directly to ESP32"""
@@ -44,18 +46,26 @@ def send_calibration(device_id, points, sensor_id='ph'):
     time.sleep(2)
     
     # Step 2: Publish calibration command
-    pub_cmd = [
-        'bash', '-c',
-        f'source /opt/ros/jazzy/setup.bash && '
-        f'source ~/microros_ws/install/local_setup.bash && '
-        f"ros2 topic pub --once /biofloc/calibration_cmd "
-        f"std_msgs/msg/String 'data: {cmd_json}'"
-    ]
+    # Write JSON to temp file to avoid shell quote escaping issues
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        f.write(cmd_json)
+        tmp_file = f.name
     
-    print(f"📡 Publicando comando al ESP32...")
-    print(f"   JSON: {cmd_json}")
-    print()
-    pub_result = subprocess.run(pub_cmd, capture_output=True, text=True, timeout=15)
+    try:
+        pub_cmd = [
+            'bash', '-c',
+            f'source /opt/ros/jazzy/setup.bash && '
+            f'source ~/microros_ws/install/local_setup.bash && '
+            f'ros2 topic pub --once /biofloc/calibration_cmd '
+            f'std_msgs/msg/String "{{data: \\"$(cat {tmp_file})\\"}}"'
+        ]
+        
+        print(f"📡 Publicando comando al ESP32...")
+        print(f"   JSON: {cmd_json}")
+        print()
+        pub_result = subprocess.run(pub_cmd, capture_output=True, text=True, timeout=15)
+    finally:
+        os.unlink(tmp_file)
     
     if pub_result.returncode != 0:
         print(f"❌ Error publicando: {pub_result.stderr}")
