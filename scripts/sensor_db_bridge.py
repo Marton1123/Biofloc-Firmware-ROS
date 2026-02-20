@@ -299,9 +299,14 @@ class SensorDBBridge(Node):
             self.messages_failed += 1
     
     def _update_device_metadata(self, device_id: str, location: str, timestamp: str):
-        """Update device metadata atomically using upsert."""
-        # CORRECCIÓN 3: Operación atómica upsert para evitar Race Conditions (DuplicateKeyError)
+        """Update device metadata atomically using upsert, limpiando 'conexion' si es necesario."""
         try:
+            # Validar y limpiar el campo 'conexion' si no es un objeto
+            doc = self.devices_collection.find_one({'_id': device_id})
+            if doc and 'conexion' in doc and not isinstance(doc['conexion'], dict):
+                self.get_logger().warning(f"Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
+                self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
+
             self.devices_collection.update_one(
                 {'_id': device_id},
                 {
