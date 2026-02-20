@@ -1,7 +1,7 @@
 /**
  * @file data_aggregator.c
- * @brief Implementación del agregador de datos de sensores
- * @version 4.0.0
+ * @brief Implementación del agregador de datos de sensores (Thread-Safe v4.1.2)
+ * @version 4.1.2
  */
 
 #include "data_aggregator.h"
@@ -83,8 +83,13 @@ static float calculate_average(const float *values, uint16_t count)
  */
 static void aggregate_samples(sensors_data_t *result)
 {
-    const app_state_t *state = app_state_get();
-    data_aggregation_mode_t mode = state->sensor_config.mode;
+    /* CORRECCIÓN 1: Adaptado a la nueva API segura de app_state */
+    app_state_t state;
+    data_aggregation_mode_t mode = DATA_MODE_INSTANT; // Default fallback
+    if (app_state_get(&state) == ESP_OK) {
+        mode = state.sensor_config.mode;
+    }
+
     uint16_t count = s_aggregator.count;
     
     if (count == 0) {
@@ -144,6 +149,9 @@ static void aggregate_samples(sensors_data_t *result)
     result->timestamp_ms = s_aggregator.samples[count - 1].timestamp_ms;
     strncpy(result->timestamp_iso, s_aggregator.samples[count - 1].timestamp_iso, 
             sizeof(result->timestamp_iso) - 1);
+            
+    /* CORRECCIÓN 3: Forzar terminador nulo para evitar buffer overflows en el JSON */
+    result->timestamp_iso[sizeof(result->timestamp_iso) - 1] = '\0';
 }
 
 /* ============================================================================
@@ -181,16 +189,13 @@ esp_err_t data_aggregator_add_sample(const sensors_data_t *data)
         return ESP_ERR_TIMEOUT;
     }
     
+    /* CORRECCIÓN 2: Jamás soltar el Mutex durante un memmove crítico */
     if (s_aggregator.count >= MAX_SAMPLES_BUFFER) {
-        xSemaphoreGive(s_aggregator.mutex);
         ESP_LOGW(TAG_SENSOR, "Sample buffer full, clearing oldest");
         // Shift buffer (eliminar primera muestra)
         memmove(&s_aggregator.samples[0], &s_aggregator.samples[1], 
                 (MAX_SAMPLES_BUFFER - 1) * sizeof(sensors_data_t));
         s_aggregator.count = MAX_SAMPLES_BUFFER - 1;
-        if (xSemaphoreTake(s_aggregator.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            return ESP_ERR_TIMEOUT;
-        }
     }
     
     s_aggregator.samples[s_aggregator.count++] = *data;
@@ -205,17 +210,22 @@ bool data_aggregator_should_publish(void)
         return false;
     }
     
-    const app_state_t *state = app_state_get();
+    /* CORRECCIÓN 1: Adaptado a la nueva API segura de app_state */
+    app_state_t state;
+    if (app_state_get(&state) != ESP_OK) {
+        return false; // Si no podemos leer el estado, mejor esperar
+    }
+
     uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
     uint32_t elapsed = now - s_aggregator.last_publish_time;
     
     // Caso 1: Suficientes muestras acumuladas
-    if (s_aggregator.count >= state->sensor_config.samples_per_publish) {
+    if (s_aggregator.count >= state.sensor_config.samples_per_publish) {
         return true;
     }
     
     // Caso 2: Pasó el tiempo de publicación configurado
-    if (elapsed >= state->sensor_config.publish_interval_ms) {
+    if (elapsed >= state.sensor_config.publish_interval_ms) {
         return true;
     }
     
@@ -248,14 +258,18 @@ esp_err_t data_aggregator_get_result(sensors_data_t *result)
     
     xSemaphoreGive(s_aggregator.mutex);
     
-    ESP_LOGI(TAG_SENSOR, "Aggregated data ready (mode: %d)", 
-             app_state_get()->sensor_config.mode);
+    /* CORRECCIÓN 1: Adaptado a la nueva API segura para los Logs */
+    app_state_t state;
+    if (app_state_get(&state) == ESP_OK) {
+        ESP_LOGI(TAG_SENSOR, "Aggregated data ready (mode: %d)", state.sensor_config.mode);
+    }
     
     return ESP_OK;
 }
 
 uint16_t data_aggregator_get_sample_count(void)
 {
+    // Una simple lectura de uint16_t es atómica en ESP32, no requiere mutex
     return s_aggregator.count;
 }
 
