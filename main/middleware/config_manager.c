@@ -1,7 +1,7 @@
 /**
  * @file config_manager.c
- * @brief Implementación del gestor de configuración dinámica
- * @version 4.0.0
+ * @brief Implementación del gestor de configuración dinámica (Thread-Safe v4.1.2)
+ * @version 4.1.2
  */
 
 #include "config_manager.h"
@@ -129,19 +129,9 @@ void config_manager_command_callback(const void *msgin)
         new_config.samples_per_publish = (uint32_t)samples->valueint;
         new_config.enabled = enabled ? (bool)enabled->valueint : true;
         
-        // Parsear mode
+        // Parsear mode usando el helper que ya tenías
         const char *mode_str = mode_obj->valuestring;
-        if (strcmp(mode_str, "instant") == 0) {
-            new_config.mode = DATA_MODE_INSTANT;
-        } else if (strcmp(mode_str, "median") == 0) {
-            new_config.mode = DATA_MODE_MEDIAN;
-        } else if (strcmp(mode_str, "average") == 0) {
-            new_config.mode = DATA_MODE_AVERAGE;
-        } else {
-            ESP_LOGE(TAG, "Invalid mode: %s", mode_str);
-            cJSON_Delete(root);
-            return;
-        }
+        new_config.mode = string_to_mode(mode_str);
         
         // Validar
         esp_err_t err = config_manager_validate_config(&new_config);
@@ -151,9 +141,9 @@ void config_manager_command_callback(const void *msgin)
             return;
         }
         
-        // Aplicar a app_state
-        app_state_t *state = (app_state_t*)app_state_get();
-        state->sensor_config = new_config;
+        /* CORRECCIÓN 1: Aplicar configuración de forma segura a través del gestor de estado */
+        // NOTA: Debes agregar esta función en app_state.c/.h (ver instrucciones abajo)
+        app_state_set_sensor_config(&new_config);
         
         // Guardar en NVS
         nvs_handle_t nvs_h;
@@ -170,10 +160,10 @@ void config_manager_command_callback(const void *msgin)
         ESP_LOGI(TAG, "✓ Config applied: sample=%lums, publish=%lums, mode=%s, samples=%u",
                  new_config.sample_interval_ms,
                  new_config.publish_interval_ms,
-                 mode_str,
+                 mode_to_string(new_config.mode),
                  (unsigned)new_config.samples_per_publish);
         
-        // Reinicializar data_aggregator - se toma config de app_state
+        // Reinicializar data_aggregator
         data_aggregator_init();
         
     } else {
@@ -193,9 +183,8 @@ esp_err_t config_manager_apply_defaults(void)
         .enabled = true
     };
     
-    // Actualizar app_state
-    app_state_t *state = (app_state_t*)app_state_get();
-    state->sensor_config = default_config;
+    /* CORRECCIÓN 2: Escribir defaults de forma segura usando el setter */
+    app_state_set_sensor_config(&default_config);
     
     ESP_LOGI(TAG, "✓ Default configuration applied (instant mode, 4s interval)");
     return ESP_OK;
@@ -207,8 +196,13 @@ int config_manager_get_config_json(char *json_buffer, size_t buffer_size)
         return -1;
     }
     
-    const app_state_t *state = app_state_get();
-    const sensor_config_t *cfg = &state->sensor_config;
+    /* CORRECCIÓN 3: Leer el estado usando la API segura por copia */
+    app_state_t state_copy;
+    if (app_state_get(&state_copy) != ESP_OK) {
+        return -1;
+    }
+    
+    const sensor_config_t *cfg = &state_copy.sensor_config;
     
     int len = snprintf(json_buffer, buffer_size,
         "{"
