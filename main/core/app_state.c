@@ -1,7 +1,7 @@
 /**
  * @file app_state.c
- * @brief Implementación del gestor de estado global (Thread-Safe v4.1.1)
- * * @version 4.1.1
+ * @brief Implementación del gestor de estado global (Thread-Safe v4.1.2)
+ * @version 4.1.2
  */
 
 #include "app_state.h"
@@ -157,6 +157,17 @@ void app_state_update_device_info(const device_info_t *info)
     
     if (take_mutex()) {
         memcpy(&g_app_state.device_info, info, sizeof(device_info_t));
+        give_mutex();
+    }
+}
+
+/* NUEVA FUNCIÓN: Permite a config_manager actualizar la configuración de forma segura */
+void app_state_set_sensor_config(const sensor_config_t *config)
+{
+    if (!config) return;
+    
+    if (take_mutex()) {
+        memcpy(&g_app_state.sensor_config, config, sizeof(sensor_config_t));
         give_mutex();
     }
 }
