@@ -11,7 +11,7 @@ Architecture:
     - ESP32: Connects to hotspot, publishes to micro-ROS Agent
     - Bridge (this node): Adds timestamps, routes data to separate collections
     
-Three-collection architecture (v3.1):
+Three-collection architecture (v3.2):
     - telemetria: time-series sensor readings (biological data)
     - devices: device metadata, state, and connection history
     - system_health: ESP32 telemetry (free_heap, uptime, reset_reason)
@@ -34,7 +34,7 @@ Dependencies:
     pip install pymongo python-dotenv
 
 Author: @Marton1123
-Version: 3.1.0 (Three-collection architecture with telemetry routing)
+Version: 3.2.0 (Resilient PyMongo Pool & Atomic Upserts)
 """
 
 import json
@@ -87,7 +87,7 @@ class SensorDBBridge(Node):
     """
     ROS 2 node that receives sensor data and stores it in MongoDB.
     
-    Three-collection architecture (v3.1):
+    Three-collection architecture (v3.2):
         - telemetria: sensor readings (biological data, time-series)
         - devices: device metadata, state, connection history
         - system_health: ESP32 telemetry (free_heap, uptime, reset_reason)
@@ -125,18 +125,19 @@ class SensorDBBridge(Node):
             self.get_logger().error("pymongo not available - data will only be logged")
         
         # Subscribe to sensor topic (JSON String)
+        # CORRECCIÓN 1: QoS aumentado a 500 para absorber latencia de DB sin bloquear a ROS
         self.subscription = self.create_subscription(
             String,
             self.topic_name,
             self.sensor_callback,
-            10
+            500 
         )
         
         # Status timer (every 60 seconds)
         self.status_timer = self.create_timer(60.0, self._log_status)
         
         self.get_logger().info("=" * 60)
-        self.get_logger().info("Sensor DB Bridge v3.1 Started")
+        self.get_logger().info("Sensor DB Bridge v3.2 Started")
         self.get_logger().info(f"  Topic: {self.topic_name}")
         self.get_logger().info(f"  Database: {self.db_name}")
         self.get_logger().info(f"    - telemetria: {self.collection_name}")
@@ -191,7 +192,7 @@ class SensorDBBridge(Node):
             location = data.get('location', 'lab')
             esp32_sample_id = data.get('timestamp', 'unknown')  # Sample counter from ESP32
             
-            # === TELEMETRY ROUTING (v3.1 architecture) ===
+            # === TELEMETRY ROUTING (v3.2 architecture) ===
             # Extract and route system telemetry to separate collection
             system_data = data.pop('system', None)  # Extract and remove from data
             
@@ -278,49 +279,10 @@ class SensorDBBridge(Node):
                         self.get_logger().debug(
                             f"Saved: {device_id} | pH: {ph:.2f} | Temp: {temperature:.2f}°C"
                         )
-                    else:
-                        self.messages_failed += 1
-                        self.get_logger().warning("Failed to save document to MongoDB")
-                        
                 except Exception as e:
-                    self.get_logger().error(f"MongoDB insert error: {e}")
+                    # CORRECCIÓN 2: PyMongo maneja la reconexión. Solo registramos el error sin recrear el cliente.
+                    self.get_logger().error(f"MongoDB operation failed (auto-reconnecting in background): {e}")
                     self.messages_failed += 1
-                    self.mongodb_connected = False  # Mark as disconnected
-                    
-                    # Try to reconnect on next message
-                    self.get_logger().warning("Will attempt reconnection on next message")
-            else:
-                # Not connected to MongoDB - try reconnecting
-                if PYMONGO_AVAILABLE:
-                    self.get_logger().debug("MongoDB disconnected, attempting reconnection...")
-                    reconnected = self._connect_mongodb()
-                    if reconnected:
-                        self.get_logger().info("✅ MongoDB reconnection successful")
-                        # Retry saving this message
-                        try:
-                            result = self.telemetria_collection.insert_one(telemetria_doc)
-                            if result.inserted_id:
-                                self.messages_saved += 1
-                                self._update_device_metadata(device_id, location, server_timestamp)
-                                
-                                # Also save system health if present
-                                if system_data:
-                                    system_health_doc = {
-                                        'device_id': device_id,
-                                        'timestamp_gw': server_timestamp,
-                                        'timestamp_esp32': esp32_sample_id,
-                                        'location': location,
-                                        'free_heap': system_data.get('free_heap', 0),
-                                        'uptime_sec': system_data.get('uptime_sec', 0),
-                                        'reset_reason': system_data.get('reset_reason', 'UNKNOWN'),
-                                        '_ros_topic': self.topic_name
-                                    }
-                                    self.system_health_collection.insert_one(system_health_doc)
-                        except Exception as e:
-                            self.get_logger().error(f"Failed to save after reconnect: {e}")
-                            self.messages_failed += 1
-                    else:
-                        self.messages_failed += 1
                         
         except json.JSONDecodeError as e:
             self.get_logger().error(f"JSON parse error: {e} | Raw data: {msg.data[:100]}")
@@ -333,50 +295,40 @@ class SensorDBBridge(Node):
             self.messages_failed += 1
     
     def _update_device_metadata(self, device_id: str, location: str, timestamp: str):
-        """Update device metadata in devices collection."""
+        """Update device metadata atomically using upsert."""
+        # CORRECCIÓN 3: Operación atómica upsert para evitar Race Conditions (DuplicateKeyError)
         try:
-            # Check if device exists
-            device = self.devices_collection.find_one({'_id': device_id})
-            
-            if device:
-                # Device exists - just update
-                self.devices_collection.update_one(
-                    {'_id': device_id},
-                    {
-                        '$set': {
-                            'conexion.ultima': timestamp,
-                            'estado': 'activo',
-                            'location': location
+            self.devices_collection.update_one(
+                {'_id': device_id},
+                {
+                    '$set': {
+                        'conexion.ultima': timestamp,
+                        'estado': 'activo',
+                        'location': location
+                    },
+                    '$inc': {
+                        'conexion.total_lecturas': 1
+                    },
+                    '$setOnInsert': {
+                        'alias': f'ESP32-{device_id[-4:]}',
+                        'auto_registrado': True,
+                        'firmware_version': 'unknown',
+                        'intervalo_lectura_seg': 4,
+                        'sensores_habilitados': ['ph', 'temperatura'],
+                        'umbrales': {},
+                        'unidades': {
+                            'temperatura': '°C',
+                            'ph': 'pH'
                         },
-                        '$inc': {
-                            'conexion.total_lecturas': 1
+                        'conexion': {
+                            'primera': timestamp
                         }
                     }
-                )
-            else:
-                # Device doesn't exist - create with initial values
-                self.devices_collection.insert_one({
-                    '_id': device_id,
-                    'alias': f'ESP32-{device_id[-4:]}',
-                    'location': location,
-                    'estado': 'activo',
-                    'auto_registrado': True,
-                    'firmware_version': 'unknown',
-                    'intervalo_lectura_seg': 4,
-                    'sensores_habilitados': ['ph', 'temperatura'],
-                    'umbrales': {},
-                    'unidades': {
-                        'temperatura': '°C',
-                        'ph': 'pH'
-                    },
-                    'conexion': {
-                        'primera': timestamp,
-                        'ultima': timestamp,
-                        'total_lecturas': 1
-                    }
-                })
+                },
+                upsert=True
+            )
         except Exception as e:
-            self.get_logger().error(f"Error updating device metadata: {e}")
+            self.get_logger().error(f"Error atomic updating device metadata: {e}")
     
     def _log_sensor_data(self, data: dict, system_data: dict = None) -> None:
         """Display sensor data and system telemetry in the log."""
