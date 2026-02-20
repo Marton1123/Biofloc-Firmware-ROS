@@ -27,7 +27,7 @@ esp_err_t app_state_init(void);
  * @brief Obtiene el estado global (read-only)
  * @return Puntero constante al estado
  */
-const app_state_t *app_state_get(void);
+esp_err_t app_state_get(app_state_t *out_state);
 
 /**
  * @brief Establece el estado WiFi
