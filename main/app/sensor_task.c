@@ -103,7 +103,13 @@ void sensor_task(void *arg)
                         int len = sensors_to_json(&agg_data, json_buffer, sizeof(json_buffer),
                                                   current_state.device_info.device_id, DEVICE_LOCATION);
                         if (len > 0) {
-                            uros_manager_publish_sensor_data(json_buffer, (size_t)len);
+                            ESP_LOGI(TAG_SENSOR, "📤 Calling publish (%d bytes JSON)", len);
+                            esp_err_t pub_result = uros_manager_publish_sensor_data(json_buffer, (size_t)len);
+                            if (pub_result != ESP_OK) {
+                                ESP_LOGE(TAG_SENSOR, "❌ Publish failed: %d", pub_result);
+                            }
+                        } else {
+                            ESP_LOGE(TAG_SENSOR, "❌ sensors_to_json failed (len=%d)", len);
                         }
                     }
                 }

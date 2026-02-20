@@ -1,13 +1,32 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 4.1.5
+ * @version 4.3.5
  *
  * @description
  * Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  * Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  * Soporta calibración remota vía topic /biofloc/calibration_cmd.
  *
+ * @changelog v4.3.5 (2026-02-20) - FIX CRÍTICO: calibration_status circular buffer
+ * - 🔴 CRÍTICO: calibration_status usaba 1 solo buffer (se sobrescribía!)
+ * - 🐛 Fix: Circular buffer 5 mensajes para calibration_status (igual que sensor_data)
+ * - 🐛 Fix: Calibración + publicación inmediata causaba pérdida de conexión
+ * - ✅ SOLUCIÓN: Ahora AMBOS publishers usan circular buffer independiente
+ * - 💾 Memory: 20×2KB (sensor) + 5×512B (calib) = ~42.5KB total
+ * 
+ * @changelog v4.3.4 (2026-02-20) - Buffer 10→20 msgs + heap monitoring
+ * - Aumentó buffer sensor_data, agregó logging heap
+ * - Problema: calibration_status seguía con 1 buffer (bug no detectado)
+ * 
+ * @changelog v4.2.0 (2026-02-20) - Append-only buffer (FALLIDO)
+ * - Intentó append-only con 10 mensajes pero seguía usando assign()
+ * - Problema: Después de 40s reseteba contador y liberaba memoria en uso
+ * 
+ * @changelog v4.1.9 (2026-02-20) - Circular buffer (FALLIDO)
+ * - Intentó circular buffer 3 mensajes pero reutilizaba muy rápido
+ * - Problema: Después de 12s reutilizaba mensaje mientras lwip lo usaba
+ * 
  * @changelog v4.1.5 (2026-02-20) - FIX CRÍTICO: Heap corruption resuelto
  * - 🔴 CRÍTICO: Buffer estático 512B para calibration_status_msg (evita heap corruption)
  * - 🔴 CRÍTICO: memcpy() en lugar de puntero directo (micro-ROS async access)
@@ -211,11 +230,16 @@ static void micro_ros_task(void *arg)
     const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;  // 15000ms / 100ms = 150 iteraciones
     uint32_t keep_alive_counter = 0;
     const uint32_t keep_alive_interval = 150;  // 150 * 100ms = 15s (keep-alive cada 15s)
+    
+    // DIAGNÓSTICO v4.3.6: Monitor WiFi health cada 20s
+    uint32_t wifi_health_counter = 0;
+    const uint32_t wifi_health_interval = 200;  // 200 * 100ms = 20s
 
     while (1) {
-        esp_task_wdt_reset();
-
-        uros_manager_spin_once(100);
+        // CRÍTICO: Spin ANTES de reset watchdog (spin puede bloquearse)
+        uros_manager_spin_once(10);  // Timeout reducido 100ms → 10ms
+        
+        esp_task_wdt_reset();  // Reset después del spin
 
         if (++keep_alive_counter >= keep_alive_interval) {
             keep_alive_counter = 0;
@@ -224,32 +248,40 @@ static void micro_ros_task(void *arg)
                 ESP_LOGD(TAG_UROS, "Keep-alive check triggered");
             }
         }
+        
+        // DIAGNÓSTICO v4.3.6: Log WiFi health (RSSI, heap)
+        if (++wifi_health_counter >= wifi_health_interval) {
+            wifi_health_counter = 0;
+            char ip[16], mac[18];
+            int8_t rssi;
+            if (wifi_manager_get_info(ip, mac, &rssi) == ESP_OK) {
+                ESP_LOGI(TAG_MAIN, "📡 WiFi Health: RSSI=%ddBm, Heap=%lu bytes, IP=%s", 
+                         rssi, esp_get_free_heap_size(), ip);
+            }
+        }
 
+        // DESHABILITADO v4.3.8: El ping periódico causa falsos positivos
+        // El keep-alive (cada 15s) ya mantiene la sesión activa
+        // Problema: uros_manager_ping_agent() crea nuevas opciones RMW que
+        // interfieren con la sesión activa, causando que el 3er ping falle
+        // RESULTADO: ESP32 se reinicia innecesariamente cada 42s
+        /*
         if (++ping_counter >= ping_interval) {
             ping_counter = 0;
 
             if (!uros_manager_ping_agent()) {
                 ESP_LOGW(TAG_UROS, "⚠️ Lost connection to Agent");
                 
-                // CRÍTICO: Limpiar sesión ROS2 corrupta antes de reconectar
-                ESP_LOGI(TAG_UROS, "Cleaning up corrupted ROS2 session...");
-                uros_manager_deinit();
+                // CRÍTICO: micro-ROS NO soporta múltiples init/deinit cycles
+                // SOLUCIÓN: Reiniciar ESP32 completamente para estado limpio
+                ESP_LOGE(TAG_UROS, "Connection lost - RESTARTING ESP32 in 2s...");
+                ESP_LOGE(TAG_UROS, "Reason: micro-ROS re-initialization is unreliable");
                 
-                // Reconectar WiFi físico + esperar Agent
-                uros_manager_reconnect_forever();
-                
-                // CRÍTICO: Reinicializar sesión ROS2 completa
-                ESP_LOGI(TAG_UROS, "Re-initializing ROS2 session...");
-                ret = uros_manager_init(calibration_callback);
-                if (ret != ESP_OK) {
-                    ESP_LOGE(TAG_UROS, "FATAL: Failed to re-initialize after reconnection");
-                    vTaskDelete(NULL);
-                    return;
-                }
-                
-                ESP_LOGI(TAG_UROS, "✅ Connection fully restored");
+                vTaskDelay(pdMS_TO_TICKS(2000));  // Esperar 2s para que se vean los logs
+                esp_restart();
             }
         }
+        */
 
         vTaskDelay(pdMS_TO_TICKS(100));  // 100ms delay (reducir carga CPU)
     }

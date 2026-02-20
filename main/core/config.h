@@ -16,7 +16,7 @@
  * VERSIÓN DEL FIRMWARE
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "4.1.5"
+#define FIRMWARE_VERSION        "4.3.9"
 #define FIRMWARE_BUILD_DATE     __DATE__
 #define FIRMWARE_BUILD_TIME     __TIME__
 
