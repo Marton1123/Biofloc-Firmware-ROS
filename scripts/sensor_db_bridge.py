@@ -303,13 +303,9 @@ class SensorDBBridge(Node):
         try:
             # Validar y limpiar el campo 'conexion' si no es un objeto
             doc = self.devices_collection.find_one({'_id': device_id})
-            if doc and 'conexion' in doc:
-                self.get_logger().info("\n================= [DEVICE METADATA UPDATE] =================")
-                self.get_logger().info(f" Dispositivo: {device_id}")
-                self.get_logger().info(f" Estado actual de 'conexion':\n   {json.dumps(doc['conexion'], indent=4, ensure_ascii=False)} (tipo: {type(doc['conexion']).__name__})")
-                if not isinstance(doc['conexion'], dict):
-                    self.get_logger().warning(f"[!] Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
-                    self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
+            if doc and 'conexion' in doc and not isinstance(doc['conexion'], dict):
+                self.get_logger().warning(f"[!] Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
+                self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
 
             # Construir update_dict usando solo subcampos para evitar conflictos de rutas
             update_dict = {
@@ -335,13 +331,14 @@ class SensorDBBridge(Node):
                     'conexion.primera': timestamp
                 }
             }
-            self.get_logger().info("-----------------------------------------------------------")
-            self.get_logger().info(f" Update dict para {device_id}:\n{json.dumps(update_dict, indent=4, ensure_ascii=False)}")
-            self.get_logger().info("===========================================================\n")
-            self.devices_collection.update_one(
+            result = self.devices_collection.update_one(
                 {'_id': device_id},
                 update_dict,
                 upsert=True
+            )
+            # Log compacto y relevante
+            self.get_logger().info(
+                f"[META] {device_id} | location: {location} | ultima: {timestamp} | total_lecturas: +1 | estado: activo | {'upsert' if result.upserted_id else 'update'}"
             )
         except Exception as e:
             import traceback
