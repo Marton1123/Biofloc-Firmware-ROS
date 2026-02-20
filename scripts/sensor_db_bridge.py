@@ -304,9 +304,11 @@ class SensorDBBridge(Node):
             # Validar y limpiar el campo 'conexion' si no es un objeto
             doc = self.devices_collection.find_one({'_id': device_id})
             if doc and 'conexion' in doc:
-                self.get_logger().info(f"[DEBUG] Valor actual de 'conexion' en DB para {device_id}: {repr(doc['conexion'])} (tipo: {type(doc['conexion']).__name__})")
+                self.get_logger().info("\n================= [DEVICE METADATA UPDATE] =================")
+                self.get_logger().info(f" Dispositivo: {device_id}")
+                self.get_logger().info(f" Estado actual de 'conexion':\n   {json.dumps(doc['conexion'], indent=4, ensure_ascii=False)} (tipo: {type(doc['conexion']).__name__})")
                 if not isinstance(doc['conexion'], dict):
-                    self.get_logger().warning(f"Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
+                    self.get_logger().warning(f"[!] Corrigiendo campo 'conexion' corrupto para {device_id} (era {type(doc['conexion']).__name__})")
                     self.devices_collection.update_one({'_id': device_id}, {'$unset': {'conexion': ""}})
 
             # Construir update_dict usando solo subcampos para evitar conflictos de rutas
@@ -333,7 +335,9 @@ class SensorDBBridge(Node):
                     'conexion.primera': timestamp
                 }
             }
-            self.get_logger().info(f"[DEBUG] update_one dict para {device_id}: {update_dict}")
+            self.get_logger().info("-----------------------------------------------------------")
+            self.get_logger().info(f" Update dict para {device_id}:\n{json.dumps(update_dict, indent=4, ensure_ascii=False)}")
+            self.get_logger().info("===========================================================\n")
             self.devices_collection.update_one(
                 {'_id': device_id},
                 update_dict,
