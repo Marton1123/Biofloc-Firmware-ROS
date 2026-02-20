@@ -3,7 +3,7 @@
  * @brief Configuración global del firmware Biofloc
  * * Centraliza TODAS las constantes de configuración siguiendo
  * principio de Single Responsibility. No hay magic numbers en el código.
- * * @version 4.1.2
+ * * @version 4.1.4
  * @date 2026-02-20
  */
 
@@ -16,7 +16,7 @@
  * VERSIÓN DEL FIRMWARE
  * ============================================================================ */
 
-#define FIRMWARE_VERSION        "4.1.2"
+#define FIRMWARE_VERSION        "4.1.4"
 #define FIRMWARE_BUILD_DATE     __DATE__
 #define FIRMWARE_BUILD_TIME     __TIME__
 
@@ -30,9 +30,9 @@
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
 
 /* Timeouts de conexión (ms) */
-#define PING_TIMEOUT_MS         10000   /* Timeout para ping al Agent */
-#define PING_RETRIES            5       /* Reintentos de ping */
-#define PING_CHECK_INTERVAL_MS  8000    /* Intervalo entre pings (< watchdog) */
+#define PING_TIMEOUT_MS         2000    /* Timeout para ping al Agent (LAN = 2s suficiente) */
+#define PING_RETRIES            3       /* Reintentos de ping (reducido para evitar spam) */
+#define PING_CHECK_INTERVAL_MS  15000   /* Intervalo entre pings: 15s (< watchdog 20s) */
 
 /* Reconexión WiFi */
 #define RECONNECT_DELAY_INITIAL 3000    /* Delay inicial: 3s */

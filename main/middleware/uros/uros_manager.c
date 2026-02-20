@@ -15,6 +15,7 @@
 #include "middleware/config_manager.h"
 #include "core/config.h"
 #include "core/app_state.h"
+#include "drivers/wifi_manager.h"  /* Added: WiFi reconnection integration */
 
 #include <string.h>
 #include "esp_log.h"
@@ -238,6 +239,23 @@ esp_err_t uros_manager_init(uros_calibration_callback_t calibration_callback)
         "config_cmd"
     ));
     
+    // CRÍTICO: Inicializar buffers para mensajes de entrada ANTES del executor
+    ESP_LOGI(TAG_UROS, "Initializing message buffers...");
+    
+    // Asignar buffers estáticos para mensajes entrantes
+    static char calibration_buffer[1024];
+    static char config_buffer[1024];
+    
+    s_uros.calibration_cmd_msg.data.data = calibration_buffer;
+    s_uros.calibration_cmd_msg.data.size = 0;
+    s_uros.calibration_cmd_msg.data.capacity = sizeof(calibration_buffer);
+    
+    s_uros.config_cmd_msg.data.data = config_buffer;
+    s_uros.config_cmd_msg.data.size = 0;
+    s_uros.config_cmd_msg.data.capacity = sizeof(config_buffer);
+    
+    ESP_LOGI(TAG_UROS, "✓ Message buffers initialized (1024 bytes each)");
+    
     // Executor
     ESP_LOGI(TAG_UROS, "Creating executor (2 handles)...");
     RCCHECK(rclc_executor_init(&s_uros.executor, &s_uros.support.context,
@@ -390,7 +408,8 @@ bool uros_manager_ping_agent(void)
             return true;
         }
         attempts++;
-        vTaskDelay(pdMS_TO_TICKS(100));
+        // Esperar 500ms entre intentos (antes 100ms causaba spam)
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
     
     return false;
@@ -406,24 +425,42 @@ void uros_manager_reconnect_forever(void)
     s_uros.state = UROS_STATE_CONNECTING;
     app_state_set_uros(UROS_STATE_CONNECTING);
     
-    while (1) {
-
+    // CRÍTICO: Verificar WiFi físico PRIMERO
+    ESP_LOGI(TAG_UROS, "Step 1/2: Verifying WiFi physical connection...");
+    wifi_manager_reconnect_forever();
+    ESP_LOGI(TAG_UROS, "✓ WiFi physical layer restored");
+    
+    // CRÍTICO: Ahora sí esperar al Agent ROS (con timeout de seguridad)
+    ESP_LOGI(TAG_UROS, "Step 2/2: Waiting for ROS2 Agent (max 60 attempts)...");
+    uint32_t retry_count = 0;
+    const uint32_t MAX_RECONNECT_ATTEMPTS = 60;  // 60 * 5s = 5 minutos máximo
+    
+    while (retry_count < MAX_RECONNECT_ATTEMPTS) {
         esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(5000));
         
         if (uros_manager_ping_agent()) {
-            ESP_LOGI(TAG_UROS, "✓ Agent reconnected!");
-            // CRITICAL: Must finalize ALL previous ROS2 objects before re-init
-            // or rcl_init_options_init() will fail with rc=1
-            if (s_uros.initialized) {
-                ESP_LOGI(TAG_UROS, "Cleaning up previous ROS2 resources...");
-                uros_manager_deinit();
-            }
+            ESP_LOGI(TAG_UROS, "✓ Agent ping successful after %lu retries", (unsigned long)retry_count);
             break;
         }
         
-        ESP_LOGI(TAG_UROS, "Still waiting for Agent...");
+        retry_count++;
+        if (retry_count % 6 == 0) {  // Log cada ~30s
+            ESP_LOGI(TAG_UROS, "Still waiting for Agent... (attempt %lu/%lu)", 
+                     (unsigned long)retry_count, (unsigned long)MAX_RECONNECT_ATTEMPTS);
+        }
+        
+        // Esperar 5s entre intentos (evita spam)
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
+    
+    if (retry_count >= MAX_RECONNECT_ATTEMPTS) {
+        ESP_LOGE(TAG_UROS, "❌ Failed to reconnect after %lu attempts - RESTARTING ESP32", 
+                 (unsigned long)MAX_RECONNECT_ATTEMPTS);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();  // Reiniciar ESP32 automáticamente
+    }
+    
+    ESP_LOGI(TAG_UROS, "✓ Reconnection sequence complete - ready for re-init");
 }
 
 void uros_manager_spin_once(uint32_t timeout_ms)

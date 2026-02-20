@@ -91,9 +91,16 @@ def send_calibration(device_id, points, sensor_id='ph'):
             response_data = response_data[:-1]
         response_data = response_data.replace('\\n', '').replace('\\r', '').replace('\\t', '').strip()
         
+        # DEBUG: Print raw data
+        print(f"🔍 DEBUG - Raw data recibido ({len(response_data)} bytes):")
+        print(f"   HEX: {response_data.encode().hex()}")
+        print(f"   ASCII: {repr(response_data)}")
+        print()
+        
         response_json = json.loads(response_data)
     except (json.JSONDecodeError, IndexError, AttributeError) as e:
         print(f"⚠ ACK recibido pero JSON inválido: {e}")
+        print(f"   Raw stdout: {repr(ack_stdout[:500])}")
         return False
     
     # Step 5: Check status

@@ -1,13 +1,25 @@
 /**
  * @file    main.c
  * @brief   Biofloc Firmware ROS - Sistema de telemetría con micro-ROS
- * @version 4.1.2
+ * @version 4.1.4
  *
  * @description
  * Firmware para ESP32 con micro-ROS Jazzy sobre WiFi UDP.
  * Lee sensores de pH y temperatura CWT-BL y publica datos JSON a ROS 2.
  * Soporta calibración remota vía topic /biofloc/calibration_cmd.
  *
+ * @changelog v4.1.4 (2026-02-20) - FIX CRÍTICO: Calibración remota funcional
+ * - 🔴 CRÍTICO: Inicialización de buffers de mensajes de entrada (1024 bytes cada uno)
+ * - 🐛 Fix: Subscribers ahora pueden recibir mensajes correctamente
+ * - 🐛 Fix: Timeout de reconexión (5 min) + auto-restart si falla
+ * 
+ * @changelog v4.1.3 (2026-02-20) - CORRECCIÓN CRÍTICA DE RECONEXIÓN
+ * - 🔴 CRÍTICO: Reconexión ahora reinicializa sesión ROS2 completa (evita spam XRCE-DDS)
+ * - 🔴 CRÍTICO: Integración WiFi físico en flujo de reconexión (check WiFi antes de Agent)
+ * - ⚡ Performance: Ping cada 15s (antes 8s), timeout 2s (antes 10s), 3 retries (antes 5)
+ * - ⚡ Performance: Loop delay 100ms (antes 10ms) - reduce carga CPU en 90%
+ * - 🐛 Fix: Espaciado de 500ms entre reintentos de ping (antes 100ms causaba spam)
+ * 
  * @changelog v4.1.2 (2026-02-19) - ARQUITECTURA BLINDADA (EclipSec Standard)
  * - ✅ Core: Estado global 100% thread-safe (Copias por valor + Mutex)
  * - ✅ Hardware: Protección NVS contra Wear-Out (Evita brickeos por bucles de calibración)
@@ -67,7 +79,6 @@
 /* ============================================================================
  * Constantes de Configuración
  * ============================================================================ */
-#define PING_RETRIES            5      
 #define SAMPLE_INTERVAL_MS      CONFIG_BIOFLOC_SENSOR_SAMPLE_INTERVAL_MS
 #define DEVICE_LOCATION         CONFIG_BIOFLOC_LOCATION
 
@@ -191,9 +202,9 @@ static void micro_ros_task(void *arg)
     ESP_LOGI(TAG_MAIN, "=========================================");
 
     uint32_t ping_counter = 0;
-    const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;
+    const uint32_t ping_interval = PING_CHECK_INTERVAL_MS / 100;  // 15000ms / 100ms = 150 iteraciones
     uint32_t keep_alive_counter = 0;
-    const uint32_t keep_alive_interval = 200; 
+    const uint32_t keep_alive_interval = 150;  // 150 * 100ms = 15s (keep-alive cada 15s)
 
     while (1) {
         esp_task_wdt_reset();
@@ -213,12 +224,28 @@ static void micro_ros_task(void *arg)
 
             if (!uros_manager_ping_agent()) {
                 ESP_LOGW(TAG_UROS, "⚠️ Lost connection to Agent");
+                
+                // CRÍTICO: Limpiar sesión ROS2 corrupta antes de reconectar
+                ESP_LOGI(TAG_UROS, "Cleaning up corrupted ROS2 session...");
+                uros_manager_deinit();
+                
+                // Reconectar WiFi físico + esperar Agent
                 uros_manager_reconnect_forever();
-                ESP_LOGI(TAG_UROS, "✅ Connection restored");
+                
+                // CRÍTICO: Reinicializar sesión ROS2 completa
+                ESP_LOGI(TAG_UROS, "Re-initializing ROS2 session...");
+                ret = uros_manager_init(calibration_callback);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG_UROS, "FATAL: Failed to re-initialize after reconnection");
+                    vTaskDelete(NULL);
+                    return;
+                }
+                
+                ESP_LOGI(TAG_UROS, "✅ Connection fully restored");
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms delay (reducir carga CPU)
     }
 
     uros_manager_deinit();
