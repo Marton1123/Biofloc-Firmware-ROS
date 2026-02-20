@@ -124,13 +124,17 @@ class SensorDBBridge(Node):
         else:
             self.get_logger().error("pymongo not available - data will only be logged")
         
-        # Subscribe to sensor topic (JSON String)
-        # CORRECCIÓN 1: QoS aumentado a 500 para absorber latencia de DB sin bloquear a ROS
+        # Subscribe to sensor topic (JSON String) con QoS BEST_EFFORT para compatibilidad con ESP32
+        from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            depth=500
+        )
         self.subscription = self.create_subscription(
             String,
             self.topic_name,
             self.sensor_callback,
-            500 
+            qos_profile
         )
         
         # Status timer (every 60 seconds)
