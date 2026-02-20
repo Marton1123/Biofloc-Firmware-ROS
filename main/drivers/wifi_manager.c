@@ -1,7 +1,7 @@
 /**
  * @file wifi_manager.c
- * @brief WiFi connection manager implementation
- * @version 4.0.0
+ * @brief WiFi connection manager implementation (Hardware-Enforced v4.1.2)
+ * @version 4.1.2
  */
 
 #include "wifi_manager.h"
@@ -12,6 +12,9 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_task_wdt.h" // AÑADIDO: Para prevenir pánico en reconexión
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
 /* ============================================================================
@@ -33,11 +36,10 @@ esp_err_t wifi_manager_init(void)
 
     ESP_LOGI(TAG_WIFI, "Initializing WiFi manager...");
     
-    // Inicializar interfaz de red (micro-ROS lo hace internamente)
-    // Solo registramos el estado inicial
+    // micro-ROS configura la red inicialmente, nosotros solo marcamos el estado
     app_state_set_wifi(WIFI_STATE_CONNECTING);
     
-    ESP_LOGI(TAG_WIFI, "WiFi manager initialized (delegating to micro-ROS network interface)");
+    ESP_LOGI(TAG_WIFI, "WiFi manager initialized (delegating init to micro-ROS)");
     
     s_initialized = true;
     return ESP_OK;
@@ -45,8 +47,12 @@ esp_err_t wifi_manager_init(void)
 
 wifi_state_t wifi_manager_get_state(void)
 {
-    const app_state_t *state = app_state_get();
-    return state->wifi_state;
+    /* CORRECCIÓN: Adaptado a la nueva API Thread-Safe de app_state */
+    app_state_t current_state;
+    if (app_state_get(&current_state) == ESP_OK) {
+        return current_state.wifi_state;
+    }
+    return WIFI_STATE_DISCONNECTED; // Fallback seguro
 }
 
 esp_err_t wifi_manager_get_info(char *ip_str, char *mac_str, int8_t *rssi)
@@ -71,7 +77,7 @@ esp_err_t wifi_manager_get_info(char *ip_str, char *mac_str, int8_t *rssi)
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif && ip_str) {
         esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
             snprintf(ip_str, 16, IPSTR, IP2STR(&ip_info.ip));
         } else {
             strcpy(ip_str, "0.0.0.0");
@@ -93,15 +99,32 @@ esp_err_t wifi_manager_get_info(char *ip_str, char *mac_str, int8_t *rssi)
 
 void wifi_manager_reconnect_forever(void)
 {
-    ESP_LOGW(TAG_WIFI, "WiFi connection lost - reconnecting...");
+    ESP_LOGW(TAG_WIFI, "WiFi connection lost - forcing physical reconnect...");
     app_state_set_wifi(WIFI_STATE_CONNECTING);
     
-    // Implementación básica - en producción delegar a micro-ROS network interface
-    // Por ahora solo actualizamos estado
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    
-    ESP_LOGI(TAG_WIFI, "WiFi reconnected successfully");
-    app_state_set_wifi(WIFI_STATE_CONNECTED);
+    /* CORRECCIÓN: Bucle REAL de reconexión física con validación de IP */
+    while (1) {
+        esp_task_wdt_reset(); // Alimentar al perro en cada ciclo
+        
+        // Disparar reconexión física de la antena
+        esp_wifi_connect();
+        
+        // Esperamos 5 segundos para que la red negocie y DHCP asigne IP
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        
+        // Verificamos si realmente tenemos una IP válida
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (netif) {
+            esp_netif_ip_info_t ip_info;
+            if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
+                ESP_LOGI(TAG_WIFI, "✓ WiFi hardware reconnected successfully! IP: " IPSTR, IP2STR(&ip_info.ip));
+                app_state_set_wifi(WIFI_STATE_CONNECTED);
+                break; // Rompemos el bucle infinito solo si hay éxito
+            }
+        }
+        
+        ESP_LOGW(TAG_WIFI, "Still waiting for WiFi link/DHCP...");
+    }
 }
 
 void wifi_manager_deinit(void)
