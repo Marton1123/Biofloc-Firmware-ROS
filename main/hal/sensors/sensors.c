@@ -1,7 +1,7 @@
 /**
  * @file    sensors.c
  * @brief   CWT-BL pH and Temperature sensor driver implementation
- * @version 3.2.0 - Added embedded telemetry (free_heap, uptime, reset_reason)
+ * @version 3.2.1 - Fixed temperature calibration (applied to voltage, not temp_raw)
  */
 
 #include "sensors.h"
@@ -399,7 +399,8 @@ esp_err_t sensors_read_ph(sensor_reading_t *reading)
     float v_adc = voltage_mv / 1000.0f;
     float v_sensor = v_adc * PH_DIVIDER_FACTOR;
     
-    /* Apply calibration if enabled, otherwise use datasheet formula */
+    /* Apply calibration if enabled, otherwise use datasheet formula.
+     * Calibration formula: ph = slope * v_sensor + offset  (voltage domain) */
     float ph_value;
     if (s_ctx.ph_cal.enabled) {
         ph_value = s_ctx.ph_cal.slope * v_sensor + s_ctx.ph_cal.offset;
@@ -448,14 +449,24 @@ esp_err_t sensors_read_temperature(sensor_reading_t *reading)
 
     float v_adc = voltage_mv / 1000.0f;
     float v_sensor = v_adc * TEMP_DIVIDER_FACTOR;
-    float temp_raw = v_sensor * TEMP_CONVERSION_MULT - TEMP_CONVERSION_OFFSET;
-    
-    /* Apply calibration if enabled, otherwise use raw value */
+
+    /* FIX v3.2.1: Calibration formula is value = slope * voltage + offset,
+     * calibrated in the VOLTAGE domain (same as pH).
+     * 
+     * BUG ANTERIOR: se aplicaba la calibración sobre temp_raw (ya en °C),
+     * lo que multiplicaba el slope (~20) sobre ~21°C dando ~400°C.
+     * 
+     * CORRECTO: si hay calibración, reemplaza COMPLETAMENTE la fórmula de
+     * fábrica usando v_sensor como entrada — exactamente igual que pH.
+     * Si no hay calibración, se usa la fórmula del datasheet.
+     */
     float temp_value;
     if (s_ctx.temp_cal.enabled) {
-        temp_value = s_ctx.temp_cal.slope * temp_raw + s_ctx.temp_cal.offset;
+        /* Calibración reemplaza la fórmula fábrica: temp = slope * V_sensor + offset */
+        temp_value = s_ctx.temp_cal.slope * v_sensor + s_ctx.temp_cal.offset;
     } else {
-        temp_value = temp_raw;
+        /* Fórmula datasheet: temp = V_sensor * 20.0 - 20.0 */
+        temp_value = v_sensor * TEMP_CONVERSION_MULT - TEMP_CONVERSION_OFFSET;
     }
 
     reading->raw_adc = raw_adc;
