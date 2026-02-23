@@ -1,12 +1,14 @@
 /**
  * @file calibration_handler.c
- * @brief Implementación del manejador de calibración remota (Thread-Safe v4.1.2)
- * @version 4.1.2
- * * Arquitectura SRP (Single Responsibility Principle):
+ * @brief Implementación del manejador de calibración remota (Thread-Safe v4.1.3)
+ * @version 4.1.3 - Fixed dangling pointer: action string copied before cJSON_Delete()
+ * 
+ * Arquitectura SRP (Single Responsibility Principle):
  * - Cada función tiene una responsabilidad única
  * - Validación exhaustiva en cada paso
  * - No causa PANIC: todos los paths retornan gracefully
- * * INVARIANTE: Este código NUNCA crashea.
+ *
+ * INVARIANTE: Este código NUNCA crashea.
  */
 
 #include "calibration_handler.h"
@@ -31,6 +33,7 @@
 
 #define CAL_CMD_BUFFER_SIZE  1024  /* Buffer para JSON entrante */
 #define CAL_RESPONSE_SIZE    512   /* Buffer para respuesta ACK */
+#define CAL_ACTION_SIZE      32    /* FIX v4.1.3: Buffer para copiar action string */
 
 /* ============================================================================
  * FUNCIONES PRIVADAS - PROTOTIPOS
@@ -42,7 +45,7 @@ static int safe_receive_msg(const std_msgs__msg__String *msg,
 static cJSON *parse_calibration_json_safe(const char *json_str,
                                           char *resp, size_t resp_size,
                                           sensor_type_t *out_type,
-                                          const char **out_action);
+                                          char *out_action, size_t action_size);
 
 static void execute_calibration_action(cJSON *root,
                                        sensor_type_t sensor_type,
@@ -80,16 +83,22 @@ static int safe_receive_msg(const std_msgs__msg__String *msg,
 }
 
 /**
- * @brief Parsea y valida estructura JSON de calibración
+ * @brief Parsea y valida estructura JSON de calibración.
+ *
+ * FIX v4.1.3: El parámetro out_action ahora es un buffer propio (char*, size_t)
+ * en lugar de un puntero al string interno de cJSON (const char**).
+ * 
+ * Razón: si el caller llama cJSON_Delete(root) antes de usar out_action,
+ * el puntero queda colgado (use-after-free). Al copiar el string aquí,
+ * out_action es válido incluso después de destruir el árbol cJSON.
  */
 static cJSON *parse_calibration_json_safe(const char *json_str,
                                           char *resp, size_t resp_size,
                                           sensor_type_t *out_type,
-                                          const char **out_action)
+                                          char *out_action, size_t action_size)
 {
-    /* CORRECCIÓN: Usar API Thread-Safe */
     app_state_t state_copy;
-    if (app_state_get(&state_copy) != ESP_OK) return NULL; 
+    if (app_state_get(&state_copy) != ESP_OK) return NULL;
 
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
@@ -115,13 +124,13 @@ static cJSON *parse_calibration_json_safe(const char *json_str,
     }
 
     const char *sensor_str = sensor_json->valuestring;
-    *out_type = SENSOR_TYPE_MAX;  /* sentinel = desconocido */
+    *out_type = SENSOR_TYPE_MAX;
 
-    if (strcmp(sensor_str, "ph") == 0)                  *out_type = SENSOR_TYPE_PH;
-    else if (strcmp(sensor_str, "temperature") == 0)     *out_type = SENSOR_TYPE_TEMPERATURE;
+    if (strcmp(sensor_str, "ph") == 0)                   *out_type = SENSOR_TYPE_PH;
+    else if (strcmp(sensor_str, "temperature") == 0)      *out_type = SENSOR_TYPE_TEMPERATURE;
     else if (strcmp(sensor_str, "dissolved_oxygen") == 0) *out_type = SENSOR_TYPE_DISSOLVED_OXYGEN;
-    else if (strcmp(sensor_str, "conductivity") == 0)    *out_type = SENSOR_TYPE_CONDUCTIVITY;
-    else if (strcmp(sensor_str, "turbidity") == 0)       *out_type = SENSOR_TYPE_TURBIDITY;
+    else if (strcmp(sensor_str, "conductivity") == 0)     *out_type = SENSOR_TYPE_CONDUCTIVITY;
+    else if (strcmp(sensor_str, "turbidity") == 0)        *out_type = SENSOR_TYPE_TURBIDITY;
 
     if (*out_type == SENSOR_TYPE_MAX) {
         ESP_LOGE(TAG_CALIBRATION, "Unknown sensor type: %s", sensor_str);
@@ -145,7 +154,13 @@ static cJSON *parse_calibration_json_safe(const char *json_str,
         return NULL;
     }
 
-    *out_action = action_json->valuestring;
+    /* FIX v4.1.3: Copiar el string de action a un buffer propio del caller.
+     * Antes se devolvía un puntero directo a action_json->valuestring, que
+     * pertenece al árbol cJSON. Si el caller llamaba cJSON_Delete(root) antes
+     * de usar el puntero, resultaba en use-after-free. */
+    strncpy(out_action, action_json->valuestring, action_size - 1);
+    out_action[action_size - 1] = '\0';
+
     return root;  /* Caller DEBE llamar cJSON_Delete(root) al terminar */
 }
 
@@ -158,9 +173,8 @@ static void execute_calibration_action(cJSON *root,
                                        const char *action,
                                        char *resp, size_t resp_size)
 {
-    /* CORRECCIÓN: Usar API Thread-Safe */
     app_state_t state_copy;
-    if (app_state_get(&state_copy) != ESP_OK) return; 
+    if (app_state_get(&state_copy) != ESP_OK) return;
     
     /* ---- ACCIÓN: reset ---- */
     if (strcmp(action, "reset") == 0) {
@@ -201,7 +215,6 @@ static void execute_calibration_action(cJSON *root,
     if (strcmp(action, "calibrate") == 0) {
         ESP_LOGI(TAG_CALIBRATION, "  → Calibrate action");
         
-        /* Validar array "points" */
         cJSON *points_json = cJSON_GetObjectItem(root, "points");
         if (!cJSON_IsArray(points_json)) {
             ESP_LOGE(TAG_CALIBRATION, "Missing or invalid 'points' array");
@@ -224,7 +237,6 @@ static void execute_calibration_action(cJSON *root,
             return;
         }
 
-        /* Parsear cada punto de calibración con validación exhaustiva */
         calibration_point_t points[MAX_CALIBRATION_POINTS];
         ESP_LOGI(TAG_CALIBRATION, "  Parsing calibration points...");
 
@@ -260,7 +272,6 @@ static void execute_calibration_action(cJSON *root,
         ESP_LOGI(TAG_CALIBRATION, "  ✓ All points parsed successfully");
         ESP_LOGI(TAG_CALIBRATION, "  Calling sensors_calibrate_generic()...");
         
-        /* Ejecutar calibración + guardar en NVS */
         calibration_response_t cal_resp;
         memset(&cal_resp, 0, sizeof(cal_resp));
 
@@ -313,34 +324,32 @@ static void send_calibration_ack(const char *response)
 
 void calibration_callback(const void *msgin)
 {
-    /* CRÍTICO: Alimentar watchdog al inicio para prevenir timeout durante calibración */
     esp_task_wdt_reset();
     
-    /* PAUSAR publicación sensor_data durante calibración para prevenir crash */
     app_state_enter_calibration();
     
-    /* Buffers estáticos — fuera del stack para reducir presión en stack de 20KB */
     static char safe_buffer[CAL_CMD_BUFFER_SIZE];
     static char response[CAL_RESPONSE_SIZE];
+    /* FIX v4.1.3: Buffer propio para action, desacoplado del árbol cJSON */
+    static char action_buf[CAL_ACTION_SIZE];
     
-    /* Limpiar buffers para prevenir corrupción de datos de calibraciones previas */
     memset(safe_buffer, 0, sizeof(safe_buffer));
     memset(response, 0, sizeof(response));
+    memset(action_buf, 0, sizeof(action_buf));
 
     ESP_LOGI(TAG_CALIBRATION, "════════════════════════════════════════");
-    ESP_LOGI(TAG_CALIBRATION, "  CALIBRATION CALLBACK INVOKED (v4.1.2)");
+    ESP_LOGI(TAG_CALIBRATION, "  CALIBRATION CALLBACK INVOKED (v4.1.3)");
     ESP_LOGI(TAG_CALIBRATION, "════════════════════════════════════════");
     ESP_LOGI(TAG_CALIBRATION, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
     ESP_LOGI(TAG_CALIBRATION, "Free stack (micro_ros_task): %u bytes", uxTaskGetStackHighWaterMark(NULL));
 
-    /* Paso 1: Recepción segura con terminador nulo */
+    /* Paso 1: Recepción segura */
     ESP_LOGI(TAG_CALIBRATION, "[1/4] Receiving message...");
     int len = safe_receive_msg((const std_msgs__msg__String *)msgin,
                                safe_buffer, sizeof(safe_buffer));
     if (len < 0) {
         ESP_LOGE(TAG_CALIBRATION, "✗ safe_receive_msg FAILED");
         
-        /* CORRECCIÓN: Usar API Thread-Safe */
         app_state_t state_copy;
         if (app_state_get(&state_copy) == ESP_OK) {
             snprintf(response, sizeof(response),
@@ -362,41 +371,45 @@ void calibration_callback(const void *msgin)
     /* Paso 2: Parsear + validar JSON */
     ESP_LOGI(TAG_CALIBRATION, "[2/4] Parsing JSON...");
     sensor_type_t sensor_type;
-    const char *action = NULL;
 
+    /* FIX v4.1.3: Se pasa action_buf (buffer propio) en lugar de &action (puntero).
+     * parse_calibration_json_safe() copia el string de action aquí, así action_buf
+     * es válido aunque llamemos cJSON_Delete(root) antes de usarlo. */
     cJSON *root = parse_calibration_json_safe(safe_buffer, response,
                                               sizeof(response),
-                                              &sensor_type, &action);
+                                              &sensor_type,
+                                              action_buf, sizeof(action_buf));
     if (!root) {
         ESP_LOGE(TAG_CALIBRATION, "✗ parse_calibration_json_safe FAILED");
-        /* response ya fue llenado por la función parse */
         send_calibration_ack(response);
-        app_state_exit_calibration(); 
+        app_state_exit_calibration();
         ESP_LOGI(TAG_CALIBRATION, "════════════════════════════════════════");
         return;
     }
 
-    /* Extraer string de sensor para logging/respuesta (seguro: ya validado arriba) */
+    /* sensor_str: puntero temporal al árbol cJSON, solo se usa ANTES de cJSON_Delete */
     const char *sensor_str = cJSON_GetObjectItem(root, "sensor")->valuestring;
 
     ESP_LOGI(TAG_CALIBRATION, "✓ JSON parsed successfully");
-    ESP_LOGI(TAG_CALIBRATION, "  Action: %s | Sensor: %s | Type: %d", action, sensor_str, sensor_type);
+    ESP_LOGI(TAG_CALIBRATION, "  Action: %s | Sensor: %s | Type: %d",
+             action_buf, sensor_str, sensor_type);
 
-    /* Paso 3: Ejecutar acción */
+    /* Paso 3: Ejecutar acción — action_buf es seguro, root sigue vivo */
     ESP_LOGI(TAG_CALIBRATION, "[3/4] Executing calibration action...");
-    execute_calibration_action(root, sensor_type, sensor_str, action,
+    execute_calibration_action(root, sensor_type, sensor_str, action_buf,
                                response, sizeof(response));
     ESP_LOGI(TAG_CALIBRATION, "✓ Action executed");
     
-    /* CRÍTICO: Alimentar watchdog después de ejecución de calibración */
     esp_task_wdt_reset();
 
-    /* Paso 4: Cleanup + enviar ACK (SIEMPRE, incluso en error) */
+    /* Paso 4: Cleanup + enviar ACK.
+     * IMPORTANTE: cJSON_Delete(root) va ANTES de send_calibration_ack().
+     * action_buf y sensor_str ya no se usan después de execute_calibration_action(),
+     * por lo que este orden es seguro y libera memoria lo antes posible. */
     ESP_LOGI(TAG_CALIBRATION, "[4/4] Sending ACK...");
     cJSON_Delete(root);
     send_calibration_ack(response);
 
-    /* RESUMIR publicación sensor_data después de calibración */
     app_state_exit_calibration();
 
     ESP_LOGI(TAG_CALIBRATION, "✓ Calibration command processed successfully");
